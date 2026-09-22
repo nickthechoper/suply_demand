@@ -1,3 +1,5 @@
+const PRICE_SCALE_WIDTH = 80;
+
 const chartWrapEl = document.getElementById('chart-wrap');
 const chartEl = document.getElementById('chart');
 const supplyBoxEl = document.getElementById('supply-box');
@@ -11,8 +13,14 @@ const chart = LightweightCharts.createChart(chartEl, {
     horzLines: { color: '#1c2128' },
   },
   timeScale: { timeVisible: false, borderColor: '#2a3038' },
-  rightPriceScale: { borderColor: '#2a3038' },
+  rightPriceScale: {
+    borderColor: '#2a3038',
+    scaleMargins: { top: 0.1, bottom: 0.2 },
+    minimumWidth: PRICE_SCALE_WIDTH,
+  },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  handleScroll: { mouseWheel: false },
+  handleScale: { mouseWheel: false },
 });
 
 const candleSeries = chart.addCandlestickSeries({
@@ -33,6 +41,268 @@ const volumeSeries = chart.addHistogramSeries({
 volumeSeries.priceScale().applyOptions({
   scaleMargins: { top: 0.82, bottom: 0 },
 });
+
+function createIndicatorChart(el) {
+  return LightweightCharts.createChart(el, {
+    layout: { background: { color: '#0e1117' }, textColor: '#e6e6e6' },
+    grid: {
+      vertLines: { color: '#1c2128' },
+      horzLines: { color: '#1c2128' },
+    },
+    timeScale: { visible: false, borderColor: '#2a3038' },
+    rightPriceScale: { borderColor: '#2a3038', minimumWidth: PRICE_SCALE_WIDTH },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
+    handleScroll: false,
+    handleScale: false,
+  });
+}
+
+const atrChartEl = document.getElementById('atr-chart');
+const rsiChartEl = document.getElementById('rsi-chart');
+const rsiDiffChartEl = document.getElementById('rsi-diff-chart');
+
+const atrChart = createIndicatorChart(atrChartEl);
+const rsiChart = createIndicatorChart(rsiChartEl);
+const rsiDiffChart = createIndicatorChart(rsiDiffChartEl);
+
+const atrSeries = atrChart.addLineSeries({ color: '#ef5350', lineWidth: 2 });
+
+const rsiSeries = rsiChart.addLineSeries({ color: '#b39ddb', lineWidth: 2 });
+const rsiMaSeries = rsiChart.addLineSeries({ color: '#ffd54f', lineWidth: 1, priceLineVisible: false });
+[70, 50, 30].forEach(level => {
+  rsiSeries.createPriceLine({
+    price: level,
+    color: level === 50 ? 'rgba(120,123,134,0.5)' : '#787b86',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: false,
+  });
+});
+
+const rsiDiffSeries = rsiDiffChart.addBaselineSeries({
+  baseValue: { type: 'price', price: 0 },
+  topLineColor: 'rgba(38, 166, 154, 1)',
+  topFillColor1: 'rgba(38, 166, 154, 0.28)',
+  topFillColor2: 'rgba(38, 166, 154, 0.05)',
+  bottomLineColor: 'rgba(239, 83, 80, 1)',
+  bottomFillColor1: 'rgba(239, 83, 80, 0.05)',
+  bottomFillColor2: 'rgba(239, 83, 80, 0.28)',
+  lineWidth: 2,
+});
+
+const allCharts = [chart, atrChart, rsiChart, rsiDiffChart];
+const allChartEls = [chartEl, atrChartEl, rsiChartEl, rsiDiffChartEl];
+
+const WHEEL_ZOOM_STEP = 0.1;
+
+function onWheelZoom(chartInstance, containerEl) {
+  return e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const range = chartInstance.timeScale().getVisibleLogicalRange();
+    if (!range) return;
+    const rect = containerEl.getBoundingClientRect();
+    const pivot = chartInstance.timeScale().coordinateToLogical(e.clientX - rect.left);
+    if (pivot === null) return;
+    const factor = e.deltaY < 0 ? 1 - WHEEL_ZOOM_STEP : 1 + WHEEL_ZOOM_STEP;
+    chartInstance.timeScale().setVisibleLogicalRange({
+      from: pivot - (pivot - range.from) * factor,
+      to: pivot + (range.to - pivot) * factor,
+    });
+  };
+}
+
+allCharts.forEach((c, i) => {
+  allChartEls[i].addEventListener('wheel', onWheelZoom(c, allChartEls[i]), { passive: false });
+});
+
+let syncingRange = false;
+allCharts.forEach(c => {
+  c.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (syncingRange || !range) return;
+    syncingRange = true;
+    allCharts.forEach(other => {
+      if (other !== c) other.timeScale().setVisibleLogicalRange(range);
+    });
+    syncingRange = false;
+  });
+});
+
+let syncingCrosshair = false;
+const crosshairSeriesByChart = new Map([
+  [chart, candleSeries],
+  [atrChart, atrSeries],
+  [rsiChart, rsiSeries],
+  [rsiDiffChart, rsiDiffSeries],
+]);
+function crosshairValueForChart(otherChart, idx) {
+  if (idx === undefined) return 0;
+  if (otherChart === chart) return barsAscending[idx].close;
+  if (otherChart === atrChart) return atrValues[idx] ?? 0;
+  if (otherChart === rsiChart) return rsiValues[idx] ?? 0;
+  return rsiDiffValues[idx] ?? 0;
+}
+allCharts.forEach(c => {
+  c.subscribeCrosshairMove(param => {
+    if (syncingCrosshair) return;
+    syncingCrosshair = true;
+    if (param && param.time) {
+      const idx = barTimeToIndex.get(param.time);
+      if (c === rsiChart && idx !== undefined) {
+        rsiChart.setCrosshairPosition(crosshairValueForChart(rsiChart, idx), param.time, rsiSeries);
+      }
+      allCharts.forEach(other => {
+        if (other === c) return;
+        other.setCrosshairPosition(crosshairValueForChart(other, idx), param.time, crosshairSeriesByChart.get(other));
+      });
+    } else {
+      allCharts.forEach(other => {
+        if (other !== c) other.clearCrosshairPosition();
+      });
+    }
+    syncingCrosshair = false;
+  });
+});
+
+function clearAllCrosshairs() {
+  allCharts.forEach(c => c.clearCrosshairPosition());
+  updateIndicatorLegends(barsAscending.length - 1);
+}
+
+let atrValues = [];
+let rsiValues = [];
+let rsiMaValues = [];
+let rsiDiffValues = [];
+
+function fmtIndicator(n) {
+  return n === undefined || n === null || Number.isNaN(n) ? '–' : n.toFixed(2);
+}
+
+function updateIndicatorLegends(idx) {
+  const atrEl = document.getElementById('legend-atr');
+  const rsiEl = document.getElementById('legend-rsi');
+  const rsiMaEl = document.getElementById('legend-rsi-ma');
+  const rsiDiffEl = document.getElementById('legend-rsi-diff');
+  if (idx === null || idx === undefined) {
+    atrEl.textContent = '–';
+    rsiEl.textContent = '–';
+    rsiMaEl.textContent = '–';
+    rsiDiffEl.textContent = '–';
+    rsiDiffEl.style.color = '';
+    return;
+  }
+  atrEl.textContent = fmtIndicator(atrValues[idx]);
+  rsiEl.textContent = fmtIndicator(rsiValues[idx]);
+  rsiMaEl.textContent = fmtIndicator(rsiMaValues[idx]);
+  const diff = rsiDiffValues[idx];
+  rsiDiffEl.textContent = fmtIndicator(diff);
+  rsiDiffEl.style.color = diff == null ? '' : diff >= 0 ? '#26a69a' : '#ef5350';
+}
+
+chart.subscribeCrosshairMove(param => {
+  if (!barsAscending.length) return;
+  if (!param || !param.time) {
+    updateIndicatorLegends(barsAscending.length - 1);
+    return;
+  }
+  const idx = barTimeToIndex.get(param.time);
+  updateIndicatorLegends(idx === undefined ? null : idx);
+});
+
+function rma(values, length) {
+  const out = new Array(values.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i === length - 1) {
+      out[i] = sum / length;
+    } else if (i >= length) {
+      out[i] = (values[i] - out[i - 1]) / length + out[i - 1];
+    }
+  }
+  return out;
+}
+
+function smaSkipNulls(values, length) {
+  const out = new Array(values.length).fill(null);
+  const buffer = [];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v === null || v === undefined) continue;
+    buffer.push(v);
+    if (buffer.length > length) buffer.shift();
+    if (buffer.length === length) {
+      out[i] = buffer.reduce((a, b) => a + b, 0) / length;
+    }
+  }
+  return out;
+}
+
+function computeATR(bars, length = 14) {
+  const tr = bars.map((b, i) => {
+    if (i === 0) return b.high - b.low;
+    const prevClose = bars[i - 1].close;
+    return Math.max(b.high - b.low, Math.abs(b.high - prevClose), Math.abs(b.low - prevClose));
+  });
+  return rma(tr, length);
+}
+
+function computeRSI(bars, length = 14) {
+  const gains = new Array(bars.length).fill(0);
+  const losses = new Array(bars.length).fill(0);
+  for (let i = 1; i < bars.length; i++) {
+    const change = bars[i].close - bars[i - 1].close;
+    gains[i] = Math.max(change, 0);
+    losses[i] = Math.max(-change, 0);
+  }
+  const avgGain = rma(gains, length);
+  const avgLoss = rma(losses, length);
+  return bars.map((_, i) => {
+    if (avgGain[i] === null || avgLoss[i] === null) return null;
+    if (avgLoss[i] === 0) return avgGain[i] === 0 ? 0 : 100;
+    return 100 - 100 / (1 + avgGain[i] / avgLoss[i]);
+  });
+}
+
+function toSeriesData(bars, values) {
+  return bars.map((b, i) =>
+    values[i] === null || values[i] === undefined ? { time: b.time } : { time: b.time, value: values[i] }
+  );
+}
+
+function updateIndicators() {
+  atrValues = computeATR(barsAscending, 14);
+  rsiValues = computeRSI(barsAscending, 14);
+  rsiMaValues = smaSkipNulls(rsiValues, 14);
+  rsiDiffValues = barsAscending.map((_, i) =>
+    rsiValues[i] === null || rsiMaValues[i] === null ? null : rsiValues[i] - rsiMaValues[i]
+  );
+
+  atrSeries.setData(toSeriesData(barsAscending, atrValues));
+  rsiSeries.setData(toSeriesData(barsAscending, rsiValues));
+  rsiMaSeries.setData(toSeriesData(barsAscending, rsiMaValues));
+  rsiDiffSeries.setData(toSeriesData(barsAscending, rsiDiffValues));
+
+  updateIndicatorLegends(barsAscending.length - 1);
+}
+
+new ResizeObserver(entries => {
+  for (const entry of entries) {
+    atrChart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height });
+  }
+}).observe(document.getElementById('atr-wrap'));
+
+new ResizeObserver(entries => {
+  for (const entry of entries) {
+    rsiChart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height });
+  }
+}).observe(document.getElementById('rsi-wrap'));
+
+new ResizeObserver(entries => {
+  for (const entry of entries) {
+    rsiDiffChart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height });
+  }
+}).observe(document.getElementById('rsi-diff-wrap'));
 
 let equilibriumLine = null;
 let currentZones = null;
@@ -177,13 +447,14 @@ chart.subscribeCrosshairMove(param => {
 
 async function loadData() {
   statusEl.textContent = 'Loading…';
-  const resp = await fetch('/api/data');
+  const resp = await fetch(`/api/data?symbol=${encodeURIComponent(currentSymbol)}`);
   if (!resp.ok) {
     statusEl.textContent = `Error: ${await resp.text()}`;
     return;
   }
   const data = await resp.json();
   document.getElementById('symbol-label').textContent = data.symbol;
+  document.getElementById('symbol-switcher-text').textContent = data.symbol;
   currentSymbol = data.symbol;
 
   barsAscending = data.bars;
@@ -203,6 +474,8 @@ async function loadData() {
     value: b.volume,
     color: b.close >= b.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
   })));
+
+  updateIndicators();
 
   updateLegend(barsAscending[barsAscending.length - 1], barsAscending[barsAscending.length - 2]);
   updateFundamentals(data.fundamentals);
@@ -277,6 +550,7 @@ function resetZoom() {
     applyRange(activeRange);
   } else {
     chart.timeScale().fitContent();
+    clearAllCrosshairs();
     scheduleZoneBoxUpdate();
   }
 }
@@ -287,6 +561,7 @@ function applyRange(rangeKey) {
   const startBar = findStartBarForDays(RANGE_DAYS[rangeKey]);
 
   chart.timeScale().setVisibleRange({ from: startBar.time, to: lastBar.time });
+  clearAllCrosshairs();
 
   activeRange = rangeKey;
   document.querySelectorAll('.range-btn').forEach(btn => {
@@ -377,6 +652,28 @@ function renderProfile(profile) {
   `;
 }
 
+function renderInsiderTransactions(ownership) {
+  const el = document.getElementById('insider-body');
+  if (!ownership) {
+    el.innerHTML = '<span class="empty-note">No ownership data available.</span>';
+    return;
+  }
+  const insiderRows = (ownership.insiderTransactions || []).slice(0, 8).map(t => {
+    const info = insiderTypeInfo(t.text);
+    return `
+      <tr>
+        <td>${t.filerName || 'n/a'}</td>
+        <td>${t.relation || 'n/a'}</td>
+        <td style="color:${info.color};font-weight:600;" title="${t.text || ''}">${info.label}</td>
+        <td>${t.shares != null ? Math.round(t.shares).toLocaleString() : 'n/a'}</td>
+        <td>${t.date || 'n/a'}</td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="5" class="empty-note">n/a</td></tr>';
+
+  el.innerHTML = `<table><tr><th>Filer</th><th>Relation</th><th>Type</th><th>Shares</th><th>Date</th></tr>${insiderRows}</table>`;
+}
+
 // Yahoo's insiderTransactions give a free-text description ("Sale at price
 // 284.32 per share.", "Conversion of Exercise of derivative security...")
 // rather than a clean buy/sell field, so derive a short label from it.
@@ -408,19 +705,6 @@ function renderOwnership(ownership) {
     el.innerHTML = '<span class="empty-note">No ownership data available.</span>';
     return;
   }
-  const insiderRows = (ownership.insiderTransactions || []).slice(0, 8).map(t => {
-    const info = insiderTypeInfo(t.text);
-    return `
-      <tr>
-        <td>${t.filerName || 'n/a'}</td>
-        <td>${t.relation || 'n/a'}</td>
-        <td style="color:${info.color};font-weight:600;" title="${t.text || ''}">${info.label}</td>
-        <td>${t.shares != null ? Math.round(t.shares).toLocaleString() : 'n/a'}</td>
-        <td>${t.date || 'n/a'}</td>
-      </tr>
-    `;
-  }).join('') || '<tr><td colspan="5" class="empty-note">n/a</td></tr>';
-
   const net = ownership.netInsiderActivity || {};
 
   el.innerHTML = `
@@ -433,15 +717,15 @@ function renderOwnership(ownership) {
       </div>
       <div>
         <h4 class="card-subheading">Top Institutional Holders</h4>
-        <div class="scroll-list"><table><tr><th>Holder</th><th>% Held</th><th>Value</th></tr>${holderRows(ownership.topInstitutions)}</table></div>
+        <table><tr><th>Holder</th><th>% Held</th><th>Value</th></tr>${holderRows(ownership.topInstitutions)}</table>
       </div>
       <div>
         <h4 class="card-subheading">Top Fund Holders</h4>
-        <div class="scroll-list"><table><tr><th>Fund</th><th>% Held</th><th>Value</th></tr>${holderRows(ownership.topFunds)}</table></div>
+        <table><tr><th>Fund</th><th>% Held</th><th>Value</th></tr>${holderRows(ownership.topFunds)}</table>
       </div>
       <div>
-        <h4 class="card-subheading">Recent Insider Transactions</h4>
-        <div class="scroll-list"><table><tr><th>Filer</th><th>Relation</th><th>Type</th><th>Shares</th><th>Date</th></tr>${insiderRows}</table></div>
+        <h4 class="card-subheading">Company Profile</h4>
+        <div id="profile-body"><span class="empty-note">Loading…</span></div>
       </div>
     </div>
   `;
@@ -476,18 +760,18 @@ function renderFilings(filings) {
     el.innerHTML = '<span class="empty-note">No filings available.</span>';
     return;
   }
-  el.innerHTML = '<div class="scroll-list">' + filings.slice(0, 12).map(f => `
+  el.innerHTML = filings.slice(0, 12).map(f => `
     <div class="filing-row">
       <span class="filing-type">${f.type || ''}</span>
       <span class="filing-date">${f.date || ''}</span>
       <a class="filing-title" href="${f.url}" target="_blank" rel="noopener">${f.title || f.url}</a>
     </div>
-  `).join('') + '</div>';
+  `).join('');
 }
 
 async function loadCompanyData() {
   try {
-    const resp = await fetch('/api/company');
+    const resp = await fetch(`/api/company?symbol=${encodeURIComponent(currentSymbol)}`);
     if (!resp.ok) {
       const msg = await resp.text();
       document.querySelectorAll('#company-section .empty-note').forEach(el => {
@@ -498,8 +782,9 @@ async function loadCompanyData() {
     const data = await resp.json();
     renderAnalyst(data.analyst);
     renderPeers(data.peers, currentSymbol);
-    renderProfile(data.profile);
     renderOwnership(data.ownership);
+    renderProfile(data.profile);
+    renderInsiderTransactions(data.ownership);
     renderFinancials(data.financials, data.balanceSheet, data.cashFlow);
     renderFilings(data.filings);
   } catch (e) {
@@ -509,7 +794,7 @@ async function loadCompanyData() {
 
 document.getElementById('refresh').addEventListener('click', async () => {
   statusEl.textContent = 'Refreshing from Yahoo Finance…';
-  const resp = await fetch('/api/refresh', { method: 'POST' });
+  const resp = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}`, { method: 'POST' });
   if (!resp.ok) {
     statusEl.textContent = `Refresh failed: ${await resp.text()}`;
     return;
@@ -518,4 +803,122 @@ document.getElementById('refresh').addEventListener('click', async () => {
   await loadCompanyData();
 });
 
-loadData().then(loadCompanyData);
+let trackedSymbols = [];
+
+async function switchSymbol(symbol) {
+  if (symbol === currentSymbol) return;
+  currentSymbol = symbol;
+  activeRange = '2Y';
+  await loadData();
+  await loadCompanyData();
+}
+
+// --- Ctrl+K ticker switcher ---------------------------------------------
+
+const paletteOverlayEl = document.getElementById('palette-overlay');
+const paletteInputEl = document.getElementById('palette-input');
+const paletteListEl = document.getElementById('palette-list');
+let paletteMatches = [];
+let paletteActiveIndex = 0;
+
+function openPalette() {
+  paletteOverlayEl.classList.remove('hidden');
+  paletteInputEl.value = '';
+  renderPaletteMatches('');
+  paletteInputEl.focus();
+}
+
+function closePalette() {
+  paletteOverlayEl.classList.add('hidden');
+}
+
+function renderPaletteMatches(query) {
+  const q = query.trim().toUpperCase();
+  paletteMatches = q
+    ? trackedSymbols.filter(s => s.includes(q))
+    : trackedSymbols;
+  paletteActiveIndex = 0;
+
+  if (!paletteMatches.length) {
+    paletteListEl.innerHTML = `<div class="palette-empty">No tracked ticker matches "${query}".</div>`;
+    return;
+  }
+
+  paletteListEl.innerHTML = paletteMatches.map((s, i) => `
+    <div class="palette-item${i === paletteActiveIndex ? ' active' : ''}" data-symbol="${s}">
+      <span class="palette-symbol">${s}</span>
+      ${s === currentSymbol ? '<span class="palette-hint">current</span>' : ''}
+    </div>
+  `).join('');
+}
+
+function setPaletteActive(index) {
+  if (!paletteMatches.length) return;
+  paletteActiveIndex = (index + paletteMatches.length) % paletteMatches.length;
+  paletteListEl.querySelectorAll('.palette-item').forEach((el, i) => {
+    el.classList.toggle('active', i === paletteActiveIndex);
+  });
+  const activeEl = paletteListEl.children[paletteActiveIndex];
+  if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+}
+
+function selectPaletteActive() {
+  const symbol = paletteMatches[paletteActiveIndex];
+  if (!symbol) return;
+  closePalette();
+  switchSymbol(symbol);
+}
+
+document.getElementById('symbol-switcher').addEventListener('click', openPalette);
+
+paletteInputEl.addEventListener('input', () => renderPaletteMatches(paletteInputEl.value));
+
+paletteInputEl.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    setPaletteActive(paletteActiveIndex + 1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    setPaletteActive(paletteActiveIndex - 1);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    selectPaletteActive();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closePalette();
+  }
+});
+
+paletteListEl.addEventListener('click', e => {
+  const item = e.target.closest('.palette-item');
+  if (!item) return;
+  closePalette();
+  switchSymbol(item.dataset.symbol);
+});
+
+paletteOverlayEl.addEventListener('click', e => {
+  if (e.target === paletteOverlayEl) closePalette();
+});
+
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (paletteOverlayEl.classList.contains('hidden')) {
+      openPalette();
+    } else {
+      closePalette();
+    }
+  }
+});
+
+async function init() {
+  const resp = await fetch('/api/symbols');
+  const data = await resp.json();
+  trackedSymbols = data.symbols || [];
+  currentSymbol = trackedSymbols[0] || '';
+
+  await loadData();
+  await loadCompanyData();
+}
+
+init();
