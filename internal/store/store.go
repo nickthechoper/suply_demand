@@ -36,6 +36,19 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("creating bars table: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS fundamentals (
+			symbol             TEXT PRIMARY KEY,
+			pe_ratio           REAL,
+			peg_ratio          REAL,
+			revenue_growth_pct REAL,
+			net_margin_pct     REAL,
+			fetched_at         INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating fundamentals table: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -109,6 +122,51 @@ func (s *Store) LatestBars(symbol string, limit int) ([]yahoo.Bar, error) {
 	}
 
 	return bars, nil
+}
+
+// SetFundamentals upserts the fundamentals snapshot for symbol, stamped with the current time.
+func (s *Store) SetFundamentals(symbol string, f yahoo.Fundamentals) error {
+	_, err := s.db.Exec(`
+		INSERT INTO fundamentals (symbol, pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET
+			pe_ratio = excluded.pe_ratio,
+			peg_ratio = excluded.peg_ratio,
+			revenue_growth_pct = excluded.revenue_growth_pct,
+			net_margin_pct = excluded.net_margin_pct,
+			fetched_at = excluded.fetched_at
+	`, symbol, f.PERatio, f.PEGRatio, f.RevenueGrowthPct, f.NetMarginPct, time.Now().Unix())
+	return err
+}
+
+// Fundamentals returns the stored fundamentals snapshot for symbol along with
+// when it was fetched. ok is false if nothing has been stored yet.
+func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt time.Time, ok bool, err error) {
+	var peRatio, pegRatio, revenueGrowthPct, netMarginPct sql.NullFloat64
+	var ts int64
+	row := s.db.QueryRow(`
+		SELECT pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at
+		FROM fundamentals WHERE symbol = ?
+	`, symbol)
+	if scanErr := row.Scan(&peRatio, &pegRatio, &revenueGrowthPct, &netMarginPct, &ts); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			return f, time.Time{}, false, nil
+		}
+		return f, time.Time{}, false, scanErr
+	}
+	if peRatio.Valid {
+		f.PERatio = &peRatio.Float64
+	}
+	if pegRatio.Valid {
+		f.PEGRatio = &pegRatio.Float64
+	}
+	if revenueGrowthPct.Valid {
+		f.RevenueGrowthPct = &revenueGrowthPct.Float64
+	}
+	if netMarginPct.Valid {
+		f.NetMarginPct = &netMarginPct.Float64
+	}
+	return f, time.Unix(ts, 0).UTC(), true, nil
 }
 
 // LatestTimestamp returns the most recent bar timestamp stored for symbol, or the zero time if none.

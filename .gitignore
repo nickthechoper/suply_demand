@@ -1,3 +1,4 @@
 /dashboard.exe
 /data/*.db
 /server.log
+.idea/php.xml

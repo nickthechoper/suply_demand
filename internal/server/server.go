@@ -66,10 +66,18 @@ type zonesDTO struct {
 	Profile []profileBinDTO `json:"profile"`
 }
 
+type fundamentalsDTO struct {
+	PERatio          *float64 `json:"peRatio"`
+	PEGRatio         *float64 `json:"pegRatio"`
+	RevenueGrowthPct *float64 `json:"revenueGrowthPct"`
+	NetMarginPct     *float64 `json:"netMarginPct"`
+}
+
 type dataResponse struct {
-	Symbol string   `json:"symbol"`
-	Bars   []barDTO `json:"bars"`
-	Zones  zonesDTO `json:"zones"`
+	Symbol       string          `json:"symbol"`
+	Bars         []barDTO        `json:"bars"`
+	Zones        zonesDTO        `json:"zones"`
+	Fundamentals fundamentalsDTO `json:"fundamentals"`
 }
 
 func (s *Server) Routes() http.Handler {
@@ -129,9 +137,21 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		profileDTOs[i] = profileBinDTO{Low: p.Low, High: p.High, Volume: p.Volume}
 	}
 
+	fundamentals, _, _, err := s.store.Fundamentals(s.config.Symbol)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	resp := dataResponse{
 		Symbol: s.config.Symbol,
 		Bars:   barDTOs,
+		Fundamentals: fundamentalsDTO{
+			PERatio:          fundamentals.PERatio,
+			PEGRatio:         fundamentals.PEGRatio,
+			RevenueGrowthPct: fundamentals.RevenueGrowthPct,
+			NetMarginPct:     fundamentals.NetMarginPct,
+		},
 		Zones: zonesDTO{
 			Max:             result.Max,
 			Min:             result.Min,
@@ -157,8 +177,8 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRefresh re-fetches the full daily history for the configured symbol
-// from Yahoo Finance and upserts it into the store.
+// handleRefresh re-fetches the full daily history and fundamentals for the
+// configured symbol from Yahoo Finance and upserts them into the store.
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	bars, err := yahoo.FetchDaily(s.config.Symbol, "5y")
 	if err != nil {
@@ -169,6 +189,21 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	fundamentalsFetched := true
+	fundamentals, err := yahoo.FetchFundamentals(s.config.Symbol)
+	if err != nil {
+		log.Printf("warning: could not refresh fundamentals: %v", err)
+		fundamentalsFetched = false
+	} else if err := s.store.SetFundamentals(s.config.Symbol, fundamentals); err != nil {
+		log.Printf("warning: could not store refreshed fundamentals: %v", err)
+		fundamentalsFetched = false
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"symbol": s.config.Symbol, "barsFetched": len(bars)})
+	json.NewEncoder(w).Encode(map[string]any{
+		"symbol":              s.config.Symbol,
+		"barsFetched":         len(bars),
+		"fundamentalsFetched": fundamentalsFetched,
+	})
 }
