@@ -373,8 +373,22 @@ function renderProfile(profile) {
     <div class="stat-row"><span>Employees</span><b>${profile.employees != null ? Math.round(profile.employees).toLocaleString() : 'n/a'}</b></div>
     <div class="stat-row"><span>Website</span><b><a href="${profile.website}" target="_blank" rel="noopener">${profile.website || 'n/a'}</a></b></div>
     <div class="stat-row"><span>Address</span><b>${profile.address || 'n/a'}</b></div>
-    <div class="summary-text" style="margin-top:10px;">${profile.summary || ''}</div>
+    <div class="summary-text">${profile.summary || ''}</div>
   `;
+}
+
+// Yahoo's insiderTransactions give a free-text description ("Sale at price
+// 284.32 per share.", "Conversion of Exercise of derivative security...")
+// rather than a clean buy/sell field, so derive a short label from it.
+function insiderTypeInfo(text) {
+  // Empty means Yahoo didn't classify this filing, not that the field doesn't apply.
+  if (!text) return { label: 'Unknown', color: '' };
+  const lower = text.toLowerCase();
+  if (lower.startsWith('sale')) return { label: 'Sell', color: '#ef5350' };
+  if (lower.startsWith('purchase') || lower.startsWith('buy')) return { label: 'Buy', color: '#26a69a' };
+  if (lower.startsWith('conversion') || lower.startsWith('exercise')) return { label: 'Exercise', color: '' };
+  if (lower.startsWith('grant') || lower.startsWith('award')) return { label: 'Grant', color: '' };
+  return { label: text.split(' ')[0], color: '' };
 }
 
 function holderRows(holders) {
@@ -394,19 +408,23 @@ function renderOwnership(ownership) {
     el.innerHTML = '<span class="empty-note">No ownership data available.</span>';
     return;
   }
-  const insiderRows = (ownership.insiderTransactions || []).slice(0, 8).map(t => `
-    <tr>
-      <td>${t.filerName || 'n/a'}</td>
-      <td>${t.relation || 'n/a'}</td>
-      <td>${t.shares != null ? Math.round(t.shares).toLocaleString() : 'n/a'}</td>
-      <td>${t.date || 'n/a'}</td>
-    </tr>
-  `).join('') || '<tr><td colspan="4" class="empty-note">n/a</td></tr>';
+  const insiderRows = (ownership.insiderTransactions || []).slice(0, 8).map(t => {
+    const info = insiderTypeInfo(t.text);
+    return `
+      <tr>
+        <td>${t.filerName || 'n/a'}</td>
+        <td>${t.relation || 'n/a'}</td>
+        <td style="color:${info.color};font-weight:600;" title="${t.text || ''}">${info.label}</td>
+        <td>${t.shares != null ? Math.round(t.shares).toLocaleString() : 'n/a'}</td>
+        <td>${t.date || 'n/a'}</td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="5" class="empty-note">n/a</td></tr>';
 
   const net = ownership.netInsiderActivity || {};
 
   el.innerHTML = `
-    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap:16px;">
+    <div class="ownership-grid">
       <div>
         <div class="stat-row"><span>Insiders Hold</span><b>${fmtFractionPct(ownership.insidersPct)}</b></div>
         <div class="stat-row"><span>Institutions Hold</span><b>${fmtFractionPct(ownership.institutionsPct)}</b></div>
@@ -414,16 +432,16 @@ function renderOwnership(ownership) {
         <div class="stat-row"><span>Net Insider Shares (${net.period || 'n/a'})</span><b>${net.netShares != null ? Math.round(net.netShares).toLocaleString() : 'n/a'}</b></div>
       </div>
       <div>
-        <h4 style="margin:0 0 6px; font-size:12px; color:var(--muted);">Top Institutional Holders</h4>
+        <h4 class="card-subheading">Top Institutional Holders</h4>
         <div class="scroll-list"><table><tr><th>Holder</th><th>% Held</th><th>Value</th></tr>${holderRows(ownership.topInstitutions)}</table></div>
       </div>
       <div>
-        <h4 style="margin:0 0 6px; font-size:12px; color:var(--muted);">Top Fund Holders</h4>
+        <h4 class="card-subheading">Top Fund Holders</h4>
         <div class="scroll-list"><table><tr><th>Fund</th><th>% Held</th><th>Value</th></tr>${holderRows(ownership.topFunds)}</table></div>
       </div>
       <div>
-        <h4 style="margin:0 0 6px; font-size:12px; color:var(--muted);">Recent Insider Transactions</h4>
-        <div class="scroll-list"><table><tr><th>Filer</th><th>Relation</th><th>Shares</th><th>Date</th></tr>${insiderRows}</table></div>
+        <h4 class="card-subheading">Recent Insider Transactions</h4>
+        <div class="scroll-list"><table><tr><th>Filer</th><th>Relation</th><th>Type</th><th>Shares</th><th>Date</th></tr>${insiderRows}</table></div>
       </div>
     </div>
   `;
@@ -441,14 +459,14 @@ function renderFinancials(financials, balanceSheet, cashFlow) {
 
   el.innerHTML = `
     <table><tr><th>Year End</th><th>Revenue</th><th>Net Income</th></tr>${rows}</table>
-    <h4 style="margin:14px 0 6px; font-size:12px; color:var(--muted);">Latest Balance Sheet &amp; Cash Flow</h4>
+    <h4 class="card-subheading spaced">Latest Balance Sheet &amp; Cash Flow</h4>
     <div class="stat-row"><span>Total Cash</span><b>${fmtMoney(balanceSheet && balanceSheet.totalCash)}</b></div>
     <div class="stat-row"><span>Total Debt</span><b>${fmtMoney(balanceSheet && balanceSheet.totalDebt)}</b></div>
     <div class="stat-row"><span>Current Ratio</span><b>${balanceSheet && balanceSheet.currentRatio != null ? fmt(balanceSheet.currentRatio) : 'n/a'}</b></div>
     <div class="stat-row"><span>Quick Ratio</span><b>${balanceSheet && balanceSheet.quickRatio != null ? fmt(balanceSheet.quickRatio) : 'n/a'}</b></div>
     <div class="stat-row"><span>Operating Cash Flow</span><b>${fmtMoney(cashFlow && cashFlow.operatingCashflow)}</b></div>
     <div class="stat-row"><span>Free Cash Flow</span><b>${fmtMoney(cashFlow && cashFlow.freeCashflow)}</b></div>
-    <div class="empty-note" style="margin-top:8px; display:block;">Balance sheet &amp; cash flow are latest-available snapshots — Yahoo's free API no longer provides historical detail for these.</div>
+    <div class="empty-note" style="margin-top:var(--space-3); display:block;">Balance sheet &amp; cash flow are latest-available snapshots — Yahoo's free API no longer provides historical detail for these.</div>
   `;
 }
 

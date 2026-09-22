@@ -29,6 +29,7 @@ type InsiderTransaction struct {
 	Relation  string   `json:"relation"`
 	Shares    *float64 `json:"shares"`
 	Date      string   `json:"date"`
+	Text      string   `json:"text"` // e.g. "Sale at price 284.32 per share."
 }
 
 type NetInsiderActivity struct {
@@ -140,10 +141,11 @@ type companyDataResponse struct {
 			} `json:"fundOwnership"`
 			InsiderTransactions struct {
 				Transactions []struct {
-					FilerName     string            `json:"filerName"`
-					FilerRelation string            `json:"filerRelation"`
-					Shares        quoteSummaryFloat `json:"shares"`
-					StartDate     quoteSummaryDate  `json:"startDate"`
+					FilerName       string            `json:"filerName"`
+					FilerRelation   string            `json:"filerRelation"`
+					Shares          quoteSummaryFloat `json:"shares"`
+					StartDate       quoteSummaryDate  `json:"startDate"`
+					TransactionText string            `json:"transactionText"`
 				} `json:"transactions"`
 			} `json:"insiderTransactions"`
 			NetSharePurchaseActivity struct {
@@ -292,6 +294,7 @@ func FetchCompanyData(symbol string, peerSymbols []string) (CompanyData, error) 
 			Relation:  t.FilerRelation,
 			Shares:    t.Shares.Raw,
 			Date:      t.StartDate.Fmt,
+			Text:      t.TransactionText,
 		})
 	}
 	for _, s := range r.IncomeStatementHistory.IncomeStatementHistory {
