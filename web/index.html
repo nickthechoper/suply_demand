@@ -124,6 +124,53 @@
   #fundamentals-table td.metric { color: #fff; }
   #fundamentals-table td.value { color: #fff; text-align: right; }
   #status { padding: 12px 20px 16px; color: var(--muted); font-size: 12px; }
+
+  #company-section {
+    padding: 8px 20px 24px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 12px;
+  }
+  .company-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .company-card.wide { grid-column: 1 / -1; }
+  .company-card h3 {
+    font-size: 13px;
+    margin: 0 0 10px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+  }
+  .company-card .stat-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+  .company-card .stat-row span { color: var(--muted); }
+  .company-card .stat-row b { color: var(--text); font-weight: 600; }
+  .company-card table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .company-card th, .company-card td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .company-card th:first-child, .company-card td:first-child { text-align: left; white-space: normal; }
+  .company-card th { color: var(--muted); font-weight: 600; }
+  .company-card td.highlight { color: var(--supply); font-weight: 600; }
+  .company-card tr.highlight-row td { background: rgba(33, 87, 243, 0.1); }
+  .company-card .scroll-list { max-height: 220px; overflow-y: auto; }
+  .company-card .summary-text { font-size: 12px; line-height: 1.5; color: var(--muted); max-height: 140px; overflow-y: auto; }
+  .company-card .empty-note { font-size: 12px; color: var(--muted); font-style: italic; }
+  .company-card a { color: var(--supply); text-decoration: none; }
+  .company-card a:hover { text-decoration: underline; }
+
+  .target-range { position: relative; height: 28px; margin: 16px 0 24px; }
+  .target-range .track { position: absolute; top: 12px; left: 0; right: 0; height: 4px; background: var(--border); border-radius: 2px; }
+  .target-range .marker { position: absolute; top: 6px; width: 2px; height: 16px; background: var(--muted); }
+  .target-range .marker.mean { background: var(--supply); width: 3px; }
+  .target-range .marker.current { background: #fff; width: 3px; }
+  .target-range .marker-label { position: absolute; top: -14px; font-size: 10px; color: var(--muted); white-space: nowrap; transform: translateX(-50%); }
+
+  .filing-row { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; align-items: baseline; }
+  .filing-row .filing-type { color: var(--supply); font-weight: 600; min-width: 42px; }
+  .filing-row .filing-date { color: var(--muted); min-width: 78px; }
+  .filing-row .filing-title { flex: 1; }
 </style>
 </head>
 <body>
@@ -166,6 +213,38 @@
   </div>
 
   <div id="status"></div>
+
+  <div id="company-section">
+    <div class="company-card" id="card-analyst">
+      <h3>Analyst Target &amp; Rating</h3>
+      <div id="analyst-body"><span class="empty-note">Loading…</span></div>
+    </div>
+
+    <div class="company-card" id="card-peers">
+      <h3>Peer Comparison</h3>
+      <div id="peers-body"><span class="empty-note">Loading…</span></div>
+    </div>
+
+    <div class="company-card wide" id="card-profile">
+      <h3>Company Profile</h3>
+      <div id="profile-body"><span class="empty-note">Loading…</span></div>
+    </div>
+
+    <div class="company-card wide" id="card-ownership">
+      <h3>Ownership</h3>
+      <div id="ownership-body"><span class="empty-note">Loading…</span></div>
+    </div>
+
+    <div class="company-card" id="card-financials">
+      <h3>Financial Statements</h3>
+      <div id="financials-body"><span class="empty-note">Loading…</span></div>
+    </div>
+
+    <div class="company-card" id="card-filings">
+      <h3>SEC Filings</h3>
+      <div id="filings-body"><span class="empty-note">Loading…</span></div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

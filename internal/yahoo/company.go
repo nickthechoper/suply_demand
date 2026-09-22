@@ -1,0 +1,321 @@
+package yahoo
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/url"
+)
+
+type AnalystTarget struct {
+	TargetHigh         *float64 `json:"targetHigh"`
+	TargetLow          *float64 `json:"targetLow"`
+	TargetMean         *float64 `json:"targetMean"`
+	TargetMedian       *float64 `json:"targetMedian"`
+	RecommendationMean *float64 `json:"recommendationMean"` // 1 (strong buy) to 5 (strong sell)
+	RecommendationKey  string   `json:"recommendationKey"`  // e.g. "buy"
+	NumAnalysts        *float64 `json:"numAnalysts"`
+}
+
+type Holder struct {
+	Organization string   `json:"organization"`
+	PctHeld      *float64 `json:"pctHeld"`
+	Shares       *float64 `json:"shares"`
+	Value        *float64 `json:"value"`
+	ReportDate   string   `json:"reportDate"`
+}
+
+type InsiderTransaction struct {
+	FilerName string   `json:"filerName"`
+	Relation  string   `json:"relation"`
+	Shares    *float64 `json:"shares"`
+	Date      string   `json:"date"`
+}
+
+type NetInsiderActivity struct {
+	Period               string   `json:"period"`
+	BuyCount             *float64 `json:"buyCount"`
+	SellCount            *float64 `json:"sellCount"`
+	NetShares            *float64 `json:"netShares"`
+	NetInstBuyingPercent *float64 `json:"netInstBuyingPercent"` // institutional net buying, as a fraction
+}
+
+type Ownership struct {
+	InsidersPct         *float64             `json:"insidersPct"`
+	InstitutionsPct     *float64             `json:"institutionsPct"`
+	InstitutionsCount   *float64             `json:"institutionsCount"`
+	TopInstitutions     []Holder             `json:"topInstitutions"`
+	TopFunds            []Holder             `json:"topFunds"`
+	InsiderTransactions []InsiderTransaction `json:"insiderTransactions"`
+	NetInsiderActivity  NetInsiderActivity   `json:"netInsiderActivity"`
+}
+
+type YearlyFinancials struct {
+	EndDate      string   `json:"endDate"`
+	TotalRevenue *float64 `json:"totalRevenue"`
+	NetIncome    *float64 `json:"netIncome"`
+}
+
+// BalanceSheetSnapshot and CashFlowSnapshot are current-point-in-time values,
+// not historical series: Yahoo's free quoteSummary API no longer populates
+// the detailed line items in balanceSheetHistory/cashflowStatementHistory,
+// so this falls back to the snapshot fields financialData still reports.
+type BalanceSheetSnapshot struct {
+	TotalCash    *float64 `json:"totalCash"`
+	TotalDebt    *float64 `json:"totalDebt"`
+	CurrentRatio *float64 `json:"currentRatio"`
+	QuickRatio   *float64 `json:"quickRatio"`
+}
+
+type CashFlowSnapshot struct {
+	OperatingCashflow *float64 `json:"operatingCashflow"`
+	FreeCashflow      *float64 `json:"freeCashflow"`
+}
+
+type SecFiling struct {
+	Date  string `json:"date"`
+	Type  string `json:"type"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+type CompanyProfile struct {
+	Sector    string   `json:"sector"`
+	Industry  string   `json:"industry"`
+	Employees *float64 `json:"employees"`
+	Website   string   `json:"website"`
+	Address   string   `json:"address"`
+	Summary   string   `json:"summary"`
+}
+
+type CompanyData struct {
+	Profile      CompanyProfile       `json:"profile"`
+	Analyst      AnalystTarget        `json:"analyst"`
+	Ownership    Ownership            `json:"ownership"`
+	Financials   []YearlyFinancials   `json:"financials"`
+	BalanceSheet BalanceSheetSnapshot `json:"balanceSheet"`
+	CashFlow     CashFlowSnapshot     `json:"cashFlow"`
+	Filings      []SecFiling          `json:"filings"`
+	Peers        []PeerQuote          `json:"peers"`
+}
+
+type companyDataResponse struct {
+	QuoteSummary struct {
+		Result []struct {
+			AssetProfile struct {
+				Sector              string   `json:"sector"`
+				Industry            string   `json:"industry"`
+				FullTimeEmployees   *float64 `json:"fullTimeEmployees"` // plain number, unlike most other fields
+				Website             string   `json:"website"`
+				Address1            string   `json:"address1"`
+				City                string   `json:"city"`
+				State               string   `json:"state"`
+				Country             string   `json:"country"`
+				LongBusinessSummary string   `json:"longBusinessSummary"`
+			} `json:"assetProfile"`
+			FinancialData struct {
+				TargetHighPrice         quoteSummaryFloat `json:"targetHighPrice"`
+				TargetLowPrice          quoteSummaryFloat `json:"targetLowPrice"`
+				TargetMeanPrice         quoteSummaryFloat `json:"targetMeanPrice"`
+				TargetMedianPrice       quoteSummaryFloat `json:"targetMedianPrice"`
+				RecommendationMean      quoteSummaryFloat `json:"recommendationMean"`
+				RecommendationKey       string            `json:"recommendationKey"`
+				NumberOfAnalystOpinions quoteSummaryFloat `json:"numberOfAnalystOpinions"`
+				TotalCash               quoteSummaryFloat `json:"totalCash"`
+				TotalDebt               quoteSummaryFloat `json:"totalDebt"`
+				CurrentRatio            quoteSummaryFloat `json:"currentRatio"`
+				QuickRatio              quoteSummaryFloat `json:"quickRatio"`
+				OperatingCashflow       quoteSummaryFloat `json:"operatingCashflow"`
+				FreeCashflow            quoteSummaryFloat `json:"freeCashflow"`
+			} `json:"financialData"`
+			MajorHoldersBreakdown struct {
+				InsidersPercentHeld     quoteSummaryFloat `json:"insidersPercentHeld"`
+				InstitutionsPercentHeld quoteSummaryFloat `json:"institutionsPercentHeld"`
+				InstitutionsCount       quoteSummaryFloat `json:"institutionsCount"`
+			} `json:"majorHoldersBreakdown"`
+			InstitutionOwnership struct {
+				OwnershipList []ownershipEntry `json:"ownershipList"`
+			} `json:"institutionOwnership"`
+			FundOwnership struct {
+				OwnershipList []ownershipEntry `json:"ownershipList"`
+			} `json:"fundOwnership"`
+			InsiderTransactions struct {
+				Transactions []struct {
+					FilerName     string            `json:"filerName"`
+					FilerRelation string            `json:"filerRelation"`
+					Shares        quoteSummaryFloat `json:"shares"`
+					StartDate     quoteSummaryDate  `json:"startDate"`
+				} `json:"transactions"`
+			} `json:"insiderTransactions"`
+			NetSharePurchaseActivity struct {
+				Period               string            `json:"period"`
+				BuyInfoCount         quoteSummaryFloat `json:"buyInfoCount"`
+				SellInfoCount        quoteSummaryFloat `json:"sellInfoCount"`
+				NetInfoShares        quoteSummaryFloat `json:"netInfoShares"`
+				NetInstBuyingPercent quoteSummaryFloat `json:"netInstBuyingPercent"`
+			} `json:"netSharePurchaseActivity"`
+			IncomeStatementHistory struct {
+				IncomeStatementHistory []struct {
+					EndDate      quoteSummaryDate  `json:"endDate"`
+					TotalRevenue quoteSummaryFloat `json:"totalRevenue"`
+					NetIncome    quoteSummaryFloat `json:"netIncome"`
+				} `json:"incomeStatementHistory"`
+			} `json:"incomeStatementHistory"`
+			SecFilings struct {
+				Filings []struct {
+					Date     string `json:"date"`
+					Type     string `json:"type"`
+					Title    string `json:"title"`
+					EdgarURL string `json:"edgarUrl"`
+				} `json:"filings"`
+			} `json:"secFilings"`
+		} `json:"result"`
+		Error *struct {
+			Code        string `json:"code"`
+			Description string `json:"description"`
+		} `json:"error"`
+	} `json:"quoteSummary"`
+}
+
+type ownershipEntry struct {
+	Organization string            `json:"organization"`
+	PctHeld      quoteSummaryFloat `json:"pctHeld"`
+	Position     quoteSummaryFloat `json:"position"`
+	Value        quoteSummaryFloat `json:"value"`
+	ReportDate   quoteSummaryDate  `json:"reportDate"`
+}
+
+// FetchCompanyData retrieves company profile, analyst targets, ownership,
+// available financial history, and SEC filings for symbol, plus a peer P/E
+// comparison against peerSymbols.
+func FetchCompanyData(symbol string, peerSymbols []string) (CompanyData, error) {
+	client, crumb, err := newAuthedClient()
+	if err != nil {
+		return CompanyData{}, err
+	}
+
+	modules := "assetProfile,financialData,majorHoldersBreakdown,institutionOwnership,fundOwnership,insiderTransactions,netSharePurchaseActivity,incomeStatementHistory,secFilings"
+	dataURL := fmt.Sprintf(
+		"https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=%s&crumb=%s",
+		symbol, modules, url.QueryEscape(crumb),
+	)
+	body, err := get(client, dataURL)
+	if err != nil {
+		return CompanyData{}, fmt.Errorf("fetching yahoo company data: %w", err)
+	}
+
+	var parsed companyDataResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return CompanyData{}, fmt.Errorf("decoding yahoo company data response: %w", err)
+	}
+	if parsed.QuoteSummary.Error != nil {
+		return CompanyData{}, fmt.Errorf("yahoo quoteSummary api error: %s", parsed.QuoteSummary.Error.Description)
+	}
+	if len(parsed.QuoteSummary.Result) == 0 {
+		return CompanyData{}, fmt.Errorf("yahoo quoteSummary api returned no data for %s", symbol)
+	}
+	r := parsed.QuoteSummary.Result[0]
+
+	address := r.AssetProfile.Address1
+	if r.AssetProfile.City != "" {
+		address += ", " + r.AssetProfile.City
+	}
+	if r.AssetProfile.State != "" {
+		address += ", " + r.AssetProfile.State
+	}
+	if r.AssetProfile.Country != "" {
+		address += ", " + r.AssetProfile.Country
+	}
+
+	data := CompanyData{
+		Profile: CompanyProfile{
+			Sector:    r.AssetProfile.Sector,
+			Industry:  r.AssetProfile.Industry,
+			Employees: r.AssetProfile.FullTimeEmployees,
+			Website:   r.AssetProfile.Website,
+			Address:   address,
+			Summary:   r.AssetProfile.LongBusinessSummary,
+		},
+		Analyst: AnalystTarget{
+			TargetHigh:         r.FinancialData.TargetHighPrice.Raw,
+			TargetLow:          r.FinancialData.TargetLowPrice.Raw,
+			TargetMean:         r.FinancialData.TargetMeanPrice.Raw,
+			TargetMedian:       r.FinancialData.TargetMedianPrice.Raw,
+			RecommendationMean: r.FinancialData.RecommendationMean.Raw,
+			RecommendationKey:  r.FinancialData.RecommendationKey,
+			NumAnalysts:        r.FinancialData.NumberOfAnalystOpinions.Raw,
+		},
+		BalanceSheet: BalanceSheetSnapshot{
+			TotalCash:    r.FinancialData.TotalCash.Raw,
+			TotalDebt:    r.FinancialData.TotalDebt.Raw,
+			CurrentRatio: r.FinancialData.CurrentRatio.Raw,
+			QuickRatio:   r.FinancialData.QuickRatio.Raw,
+		},
+		CashFlow: CashFlowSnapshot{
+			OperatingCashflow: r.FinancialData.OperatingCashflow.Raw,
+			FreeCashflow:      r.FinancialData.FreeCashflow.Raw,
+		},
+		Ownership: Ownership{
+			InsidersPct:       r.MajorHoldersBreakdown.InsidersPercentHeld.Raw,
+			InstitutionsPct:   r.MajorHoldersBreakdown.InstitutionsPercentHeld.Raw,
+			InstitutionsCount: r.MajorHoldersBreakdown.InstitutionsCount.Raw,
+			NetInsiderActivity: NetInsiderActivity{
+				Period:               r.NetSharePurchaseActivity.Period,
+				BuyCount:             r.NetSharePurchaseActivity.BuyInfoCount.Raw,
+				SellCount:            r.NetSharePurchaseActivity.SellInfoCount.Raw,
+				NetShares:            r.NetSharePurchaseActivity.NetInfoShares.Raw,
+				NetInstBuyingPercent: r.NetSharePurchaseActivity.NetInstBuyingPercent.Raw,
+			},
+		},
+	}
+
+	for _, o := range r.InstitutionOwnership.OwnershipList {
+		data.Ownership.TopInstitutions = append(data.Ownership.TopInstitutions, Holder{
+			Organization: o.Organization,
+			PctHeld:      o.PctHeld.Raw,
+			Shares:       o.Position.Raw,
+			Value:        o.Value.Raw,
+			ReportDate:   o.ReportDate.Fmt,
+		})
+	}
+	for _, o := range r.FundOwnership.OwnershipList {
+		data.Ownership.TopFunds = append(data.Ownership.TopFunds, Holder{
+			Organization: o.Organization,
+			PctHeld:      o.PctHeld.Raw,
+			Shares:       o.Position.Raw,
+			Value:        o.Value.Raw,
+			ReportDate:   o.ReportDate.Fmt,
+		})
+	}
+	for _, t := range r.InsiderTransactions.Transactions {
+		data.Ownership.InsiderTransactions = append(data.Ownership.InsiderTransactions, InsiderTransaction{
+			FilerName: t.FilerName,
+			Relation:  t.FilerRelation,
+			Shares:    t.Shares.Raw,
+			Date:      t.StartDate.Fmt,
+		})
+	}
+	for _, s := range r.IncomeStatementHistory.IncomeStatementHistory {
+		data.Financials = append(data.Financials, YearlyFinancials{
+			EndDate:      s.EndDate.Fmt,
+			TotalRevenue: s.TotalRevenue.Raw,
+			NetIncome:    s.NetIncome.Raw,
+		})
+	}
+	for _, f := range r.SecFilings.Filings {
+		data.Filings = append(data.Filings, SecFiling{
+			Date:  f.Date,
+			Type:  f.Type,
+			Title: f.Title,
+			URL:   f.EdgarURL,
+		})
+	}
+
+	peers, err := FetchPeerQuotes(client, crumb, symbol, peerSymbols)
+	if err != nil {
+		// Peer comparison is a nice-to-have; don't fail the whole fetch over it.
+		peers = nil
+	}
+	data.Peers = peers
+
+	return data, nil
+}

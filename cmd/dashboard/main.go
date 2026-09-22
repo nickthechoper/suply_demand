@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"supplydemand/internal/server"
@@ -25,7 +26,9 @@ func main() {
 	addr := flag.String("addr", ":8080", "address to serve the dashboard on")
 	webDir := flag.String("webdir", "web", "directory containing the dashboard's static frontend")
 	fetchRange := flag.String("fetch-range", "5y", "Yahoo Finance history range to fetch on startup")
+	peers := flag.String("peers", "YUM,SBUX,QSR,WEN", "comma-separated peer tickers used for P/E comparison")
 	flag.Parse()
+	peerSymbols := strings.Split(*peers, ",")
 
 	st, err := store.Open(*dbPath)
 	if err != nil {
@@ -65,6 +68,22 @@ func main() {
 		}
 	}
 
+	_, companyFetchedAt, haveCompanyData, err := st.CompanyData(*symbol)
+	if err != nil {
+		log.Fatalf("checking stored company data: %v", err)
+	}
+	if !haveCompanyData || time.Since(companyFetchedAt) > 20*time.Hour {
+		log.Printf("fetching %s company data from Yahoo Finance...", *symbol)
+		companyData, err := yahoo.FetchCompanyData(*symbol, peerSymbols)
+		if err != nil {
+			log.Printf("warning: could not fetch company data: %v", err)
+		} else if err := st.SetCompanyData(*symbol, companyData); err != nil {
+			log.Printf("warning: could not store company data: %v", err)
+		} else {
+			log.Printf("stored company data for %s", *symbol)
+		}
+	}
+
 	srv := server.New(st, server.Config{
 		Symbol:       *symbol,
 		Lookback:     *lookback,
@@ -72,6 +91,7 @@ func main() {
 		ThresholdPct: *threshold,
 		Resolution:   *resolution,
 		WebDir:       *webDir,
+		Peers:        peerSymbols,
 	})
 
 	log.Printf("serving dashboard for %s on http://localhost%s", *symbol, *addr)

@@ -18,6 +18,7 @@ type Config struct {
 	ThresholdPct float64
 	Resolution   int
 	WebDir       string
+	Peers        []string // peer tickers used for P/E comparison
 }
 
 type Server struct {
@@ -83,9 +84,30 @@ type dataResponse struct {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/data", s.handleData)
+	mux.HandleFunc("/api/company", s.handleCompany)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.Handle("/", http.FileServer(http.Dir(s.config.WebDir)))
 	return mux
+}
+
+// handleCompany returns the stored company profile, analyst targets,
+// ownership, financials, filings, and peer comparison for the configured
+// symbol.
+func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
+	data, _, ok, err := s.store.CompanyData(s.config.Symbol)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "no company data available for symbol; try /api/refresh first", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("encoding /api/company response: %v", err)
+	}
 }
 
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
@@ -200,10 +222,21 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		fundamentalsFetched = false
 	}
 
+	companyDataFetched := true
+	companyData, err := yahoo.FetchCompanyData(s.config.Symbol, s.config.Peers)
+	if err != nil {
+		log.Printf("warning: could not refresh company data: %v", err)
+		companyDataFetched = false
+	} else if err := s.store.SetCompanyData(s.config.Symbol, companyData); err != nil {
+		log.Printf("warning: could not store refreshed company data: %v", err)
+		companyDataFetched = false
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"symbol":              s.config.Symbol,
 		"barsFetched":         len(bars),
 		"fundamentalsFetched": fundamentalsFetched,
+		"companyDataFetched":  companyDataFetched,
 	})
 }

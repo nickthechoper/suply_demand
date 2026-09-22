@@ -3,9 +3,6 @@ package yahoo
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 )
 
@@ -19,7 +16,7 @@ type Fundamentals struct {
 	NetMarginPct     *float64 // trailing net profit margin, as a percentage
 }
 
-type quoteSummaryResponse struct {
+type fundamentalsResponse struct {
 	QuoteSummary struct {
 		Result []struct {
 			SummaryDetail struct {
@@ -40,78 +37,24 @@ type quoteSummaryResponse struct {
 	} `json:"quoteSummary"`
 }
 
-type quoteSummaryFloat struct {
-	Raw *float64 `json:"raw"`
-}
-
 // FetchFundamentals retrieves P/E, PEG, revenue growth, and net margin for
-// symbol from Yahoo Finance's quoteSummary API. That endpoint requires a
-// session cookie plus a matching "crumb" token, so this performs the
-// two-step handshake (prime cookies, fetch crumb) before the real request.
+// symbol from Yahoo Finance's quoteSummary API.
 func FetchFundamentals(symbol string) (Fundamentals, error) {
-	jar, err := cookiejar.New(nil)
+	client, crumb, err := newAuthedClient()
 	if err != nil {
 		return Fundamentals{}, err
-	}
-	client := &http.Client{Jar: jar}
-
-	// Step 1: hit a Yahoo domain to receive session cookies. The response
-	// itself is irrelevant (often a 404); only the Set-Cookie headers matter.
-	primeReq, err := http.NewRequest(http.MethodGet, "https://fc.yahoo.com", nil)
-	if err != nil {
-		return Fundamentals{}, err
-	}
-	primeReq.Header.Set("User-Agent", userAgent)
-	if resp, err := client.Do(primeReq); err == nil {
-		resp.Body.Close()
 	}
 
-	// Step 2: exchange the session cookie for a crumb token.
-	crumbReq, err := http.NewRequest(http.MethodGet, "https://query2.finance.yahoo.com/v1/test/getcrumb", nil)
-	if err != nil {
-		return Fundamentals{}, err
-	}
-	crumbReq.Header.Set("User-Agent", userAgent)
-	crumbResp, err := client.Do(crumbReq)
-	if err != nil {
-		return Fundamentals{}, fmt.Errorf("fetching yahoo crumb: %w", err)
-	}
-	crumbBody, err := io.ReadAll(crumbResp.Body)
-	crumbResp.Body.Close()
-	if err != nil {
-		return Fundamentals{}, err
-	}
-	if crumbResp.StatusCode != http.StatusOK || len(crumbBody) == 0 {
-		return Fundamentals{}, fmt.Errorf("yahoo crumb request returned status %d", crumbResp.StatusCode)
-	}
-	crumb := string(crumbBody)
-
-	// Step 3: the actual fundamentals request, authenticated with the cookie
-	// jar (attached automatically by the client) plus the crumb query param.
 	dataURL := fmt.Sprintf(
 		"https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics,financialData,summaryDetail&crumb=%s",
 		symbol, url.QueryEscape(crumb),
 	)
-	dataReq, err := http.NewRequest(http.MethodGet, dataURL, nil)
-	if err != nil {
-		return Fundamentals{}, err
-	}
-	dataReq.Header.Set("User-Agent", userAgent)
-	dataResp, err := client.Do(dataReq)
+	body, err := get(client, dataURL)
 	if err != nil {
 		return Fundamentals{}, fmt.Errorf("fetching yahoo fundamentals: %w", err)
 	}
-	defer dataResp.Body.Close()
 
-	body, err := io.ReadAll(dataResp.Body)
-	if err != nil {
-		return Fundamentals{}, err
-	}
-	if dataResp.StatusCode != http.StatusOK {
-		return Fundamentals{}, fmt.Errorf("yahoo quoteSummary api returned status %d: %s", dataResp.StatusCode, string(body))
-	}
-
-	var parsed quoteSummaryResponse
+	var parsed fundamentalsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return Fundamentals{}, fmt.Errorf("decoding yahoo quoteSummary response: %w", err)
 	}
