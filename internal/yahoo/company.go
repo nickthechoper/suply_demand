@@ -3,6 +3,7 @@ package yahoo
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 )
 
@@ -99,6 +100,18 @@ type CompanyData struct {
 	Peers        []PeerQuote          `json:"peers"`
 }
 
+// OwnName finds symbol's own company name among the peer quotes
+// FetchCompanyData bundles in, since Yahoo's quoteSummary API doesn't
+// surface a company name directly.
+func (d CompanyData) OwnName(symbol string) string {
+	for _, p := range d.Peers {
+		if p.Symbol == symbol {
+			return p.Name
+		}
+	}
+	return ""
+}
+
 type companyDataResponse struct {
 	QuoteSummary struct {
 		Result []struct {
@@ -190,11 +203,17 @@ type ownershipEntry struct {
 // available financial history, and SEC filings for symbol, plus a peer P/E
 // comparison against peerSymbols.
 func FetchCompanyData(symbol string, peerSymbols []string) (CompanyData, error) {
-	client, crumb, err := newAuthedClient()
+	client, crumb, err := NewAuthedClient()
 	if err != nil {
 		return CompanyData{}, err
 	}
+	return FetchCompanyDataWithClient(client, crumb, symbol, peerSymbols)
+}
 
+// FetchCompanyDataWithClient is FetchCompanyData against an already-authed
+// client/crumb pair, for callers fetching many symbols in a batch who want
+// to reuse one session instead of re-authenticating per symbol.
+func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string, peerSymbols []string) (CompanyData, error) {
 	modules := "assetProfile,financialData,majorHoldersBreakdown,institutionOwnership,fundOwnership,insiderTransactions,netSharePurchaseActivity,incomeStatementHistory,secFilings"
 	dataURL := fmt.Sprintf(
 		"https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=%s&crumb=%s",

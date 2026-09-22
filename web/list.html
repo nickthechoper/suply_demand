@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Supply &amp; Demand Dashboard — List</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --border: #2a3038;
+    --text: #e6e6e6;
+    --muted: #9aa4af;
+    --supply: #2157f3;
+    --demand: #ff5d00;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 28px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .nav-link {
+    margin-left: auto;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    padding: var(--space-2) var(--space-4);
+    border-radius: 8px;
+  }
+  header .nav-link:hover { border-color: var(--supply); }
+
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+  #search {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 8px;
+    font-size: 13px;
+    width: 220px;
+  }
+  .filter-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: var(--space-2) var(--space-4);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .filter-btn:hover { border-color: var(--supply); }
+  .filter-btn.active { background: var(--supply); border-color: var(--supply); color: #fff; }
+  #count { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+  #table-wrap { padding: var(--space-5) var(--space-6); overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    text-align: right;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--text); }
+  thead th:first-child, thead th:nth-child(2) { text-align: left; }
+  tbody td {
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border);
+    text-align: right;
+    white-space: nowrap;
+  }
+  tbody td:first-child, tbody td:nth-child(2) { text-align: left; }
+  tbody tr { cursor: pointer; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+  tbody tr:hover { background: rgba(33, 87, 243, 0.12); }
+  td.symbol { font-weight: 700; }
+  td.name { color: var(--muted); }
+  .zone-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .zone-pill.supply { background: rgba(33, 87, 243, 0.22); color: #6f96ff; }
+  .zone-pill.demand { background: rgba(255, 93, 0, 0.22); color: #ff9c5c; }
+  .zone-pill.none { background: rgba(255,255,255,0.06); color: var(--muted); }
+  .pos { color: #26a69a; }
+  .neg { color: #ef5350; }
+  .score-pill {
+    display: inline-block;
+    min-width: 34px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .score-high { background: rgba(38, 166, 154, 0.22); color: #4fd1c5; }
+  .score-mid { background: rgba(255, 200, 0, 0.18); color: #e0c34a; }
+  .score-low { background: rgba(239, 83, 80, 0.18); color: #ef8b88; }
+  .score-na { background: rgba(255,255,255,0.06); color: var(--muted); font-weight: 600; }
+  #empty-note { padding: var(--space-6); color: var(--muted); text-align: center; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Supply &amp; Demand Dashboard</h1>
+    <a class="nav-link" href="index.html">Chart view</a>
+  </header>
+
+  <div id="toolbar">
+    <input id="search" type="text" placeholder="Filter by ticker or name…" autocomplete="off" spellcheck="false" />
+    <button class="filter-btn active" data-zone="all">All</button>
+    <button class="filter-btn" data-zone="demand">Demand Zone</button>
+    <button class="filter-btn" data-zone="supply">Supply Zone</button>
+    <span id="count"></span>
+  </div>
+
+  <div id="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-key="symbol">Symbol</th>
+          <th data-key="name">Name</th>
+          <th data-key="price">Price</th>
+          <th data-key="changePct">Chg %</th>
+          <th data-key="zone">Zone</th>
+          <th data-key="demandBtm">Demand Btm</th>
+          <th data-key="demandTop">Demand Top</th>
+          <th data-key="supplyBtm">Supply Btm</th>
+          <th data-key="supplyTop">Supply Top</th>
+          <th data-key="recommendationKey">Rating</th>
+          <th data-key="upsidePct">Target Upside</th>
+          <th data-key="score">Score</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+    <div id="empty-note" class="hidden">No tickers match.</div>
+  </div>
+
+  <script src="list.js"></script>
+</body>
+</html>

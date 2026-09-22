@@ -5,15 +5,22 @@
 package main
 
 import (
+	"context"
+	"encoding/csv"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"supplydemand/internal/server"
 	"supplydemand/internal/store"
-	"supplydemand/internal/yahoo"
+	"supplydemand/internal/worker"
 )
 
 // defaultPeers gives each tracked symbol a sane P/E comparison set out of the
@@ -26,6 +33,7 @@ var defaultPeers = map[string][]string{
 
 func main() {
 	symbols := flag.String("symbols", "MCD,GRAB", "comma-separated ticker symbols to track")
+	symbolsCSV := flag.String("symbols-csv", "", "path to a CSV file with a \"Symbol\" column to import tickers from")
 	dbPath := flag.String("db", "data/dashboard.db", "path to the SQLite database file")
 	lookback := flag.Int("lookback", 500, "number of most recent daily bars used to build zones")
 	chartBars := flag.Int("chart-bars", 800, "number of most recent daily bars served to the chart (>= lookback, gives range buttons like 2Y room to work)")
@@ -33,9 +41,9 @@ func main() {
 	resolution := flag.Int("resolution", 50, "number of price bins spanning the lookback's price range")
 	addr := flag.String("addr", ":8080", "address to serve the dashboard on")
 	webDir := flag.String("webdir", "web", "directory containing the dashboard's static frontend")
-	fetchRange := flag.String("fetch-range", "5y", "Yahoo Finance history range to fetch on startup")
+	fetchRange := flag.String("fetch-range", "5y", "Yahoo Finance history range to fetch")
+	fetchPacing := flag.Duration("fetch-pacing", time.Second, "delay between individual Yahoo Finance requests made by the background worker")
 	flag.Parse()
-	symbolList := strings.Split(*symbols, ",")
 
 	st, err := store.Open(*dbPath)
 	if err != nil {
@@ -43,12 +51,66 @@ func main() {
 	}
 	defer st.Close()
 
-	for _, symbol := range symbolList {
-		fetchSymbolData(st, symbol, defaultPeers[symbol], *fetchRange)
+	explicitSymbols := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "symbols" {
+			explicitSymbols = true
+		}
+	})
+
+	// Only fall back to -symbols' default when nothing is tracked yet and no
+	// CSV was given; otherwise a bare `go run ./cmd/dashboard` should just
+	// use whatever's already persisted in the database.
+	existing, err := st.ListSymbols()
+	if err != nil {
+		log.Fatalf("listing tracked symbols: %v", err)
+	}
+	if explicitSymbols || (len(existing) == 0 && *symbolsCSV == "") {
+		for _, symbol := range strings.Split(*symbols, ",") {
+			symbol = strings.TrimSpace(symbol)
+			if symbol == "" {
+				continue
+			}
+			if err := st.UpsertSymbol(symbol); err != nil {
+				log.Fatalf("tracking symbol %s: %v", symbol, err)
+			}
+		}
 	}
 
+	if *symbolsCSV != "" {
+		imported, err := importSymbolsCSV(st, *symbolsCSV)
+		if err != nil {
+			log.Fatalf("importing symbols from %s: %v", *symbolsCSV, err)
+		}
+		log.Printf("imported %d symbols from %s", imported, *symbolsCSV)
+	}
+
+	trackedSymbols, err := st.ListSymbols()
+	if err != nil {
+		log.Fatalf("listing tracked symbols: %v", err)
+	}
+	if len(trackedSymbols) == 0 {
+		log.Fatalf("no symbols tracked; pass -symbols or -symbols-csv")
+	}
+
+	worker.BackfillNames(st, trackedSymbols)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		worker.Run(ctx, trackedSymbols, worker.Config{
+			Store:      st,
+			Peers:      defaultPeers,
+			FetchRange: *fetchRange,
+			Pacing:     *fetchPacing,
+		})
+	}()
+
 	srv := server.New(st, server.Config{
-		Symbols:      symbolList,
+		Symbols:      trackedSymbols,
 		Lookback:     *lookback,
 		ChartBars:    *chartBars,
 		ThresholdPct: *threshold,
@@ -57,60 +119,85 @@ func main() {
 		Peers:        defaultPeers,
 	})
 
-	log.Printf("serving dashboard for %s on http://localhost%s", strings.Join(symbolList, ", "), *addr)
-	if err := http.ListenAndServe(*addr, srv.Routes()); err != nil {
+	httpServer := &http.Server{
+		Addr:    *addr,
+		Handler: srv.Routes(),
+	}
+
+	serveErrs := make(chan error, 1)
+	go func() {
+		log.Printf("serving dashboard for %d symbols on http://localhost%s", len(trackedSymbols), *addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serveErrs <- err
+		}
+	}()
+
+	select {
+	case err := <-serveErrs:
 		log.Fatalf("server error: %v", err)
+	case <-ctx.Done():
+		log.Printf("shutting down...")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown error: %v", err)
+	}
+
+	select {
+	case <-workerDone:
+	case <-shutdownCtx.Done():
+		log.Printf("worker did not stop before shutdown timeout")
 	}
 }
 
-// fetchSymbolData refreshes bars, fundamentals, and company data for symbol
-// from Yahoo Finance if the stored data is missing or more than 20 hours old.
-func fetchSymbolData(st *store.Store, symbol string, peerSymbols []string, fetchRange string) {
-	latest, err := st.LatestTimestamp(symbol)
+// importSymbolsCSV reads the "Symbol" column from a CSV export (e.g. a
+// TradingView screener export) and tracks each ticker. Symbols are
+// normalized from the dotted share-class notation some providers use
+// (BRK.A) to the dash Yahoo Finance actually expects (BRK-A).
+func importSymbolsCSV(st *store.Store, path string) (int, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		log.Fatalf("checking latest stored bar for %s: %v", symbol, err)
+		return 0, err
 	}
-	if time.Since(latest) > 20*time.Hour {
-		log.Printf("fetching %s daily history from Yahoo Finance (range=%s)...", symbol, fetchRange)
-		bars, err := yahoo.FetchDaily(symbol, fetchRange)
-		if err != nil {
-			log.Printf("warning: could not fetch fresh data for %s: %v", symbol, err)
-		} else if err := st.UpsertBars(symbol, bars); err != nil {
-			log.Printf("warning: could not store fetched data for %s: %v", symbol, err)
-		} else {
-			log.Printf("stored %d bars for %s", len(bars), symbol)
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	header, err := r.Read()
+	if err != nil {
+		return 0, err
+	}
+	symbolCol := -1
+	for i, col := range header {
+		if strings.EqualFold(strings.TrimSpace(col), "Symbol") {
+			symbolCol = i
+			break
 		}
+	}
+	if symbolCol == -1 {
+		return 0, fmt.Errorf("no \"Symbol\" column found in %s", path)
 	}
 
-	_, fundamentalsFetchedAt, haveFundamentals, err := st.Fundamentals(symbol)
-	if err != nil {
-		log.Fatalf("checking stored fundamentals for %s: %v", symbol, err)
-	}
-	if !haveFundamentals || time.Since(fundamentalsFetchedAt) > 20*time.Hour {
-		log.Printf("fetching %s fundamentals from Yahoo Finance...", symbol)
-		fundamentals, err := yahoo.FetchFundamentals(symbol)
-		if err != nil {
-			log.Printf("warning: could not fetch fundamentals for %s: %v", symbol, err)
-		} else if err := st.SetFundamentals(symbol, fundamentals); err != nil {
-			log.Printf("warning: could not store fundamentals for %s: %v", symbol, err)
-		} else {
-			log.Printf("stored fundamentals for %s", symbol)
+	count := 0
+	for {
+		row, err := r.Read()
+		if err == io.EOF {
+			break
 		}
+		if err != nil {
+			return count, err
+		}
+		symbol := strings.TrimSpace(row[symbolCol])
+		if symbol == "" {
+			continue
+		}
+		symbol = strings.ReplaceAll(symbol, ".", "-")
+		if err := st.UpsertSymbol(symbol); err != nil {
+			return count, fmt.Errorf("tracking symbol %s: %w", symbol, err)
+		}
+		count++
 	}
 
-	_, companyFetchedAt, haveCompanyData, err := st.CompanyData(symbol)
-	if err != nil {
-		log.Fatalf("checking stored company data for %s: %v", symbol, err)
-	}
-	if !haveCompanyData || time.Since(companyFetchedAt) > 20*time.Hour {
-		log.Printf("fetching %s company data from Yahoo Finance...", symbol)
-		companyData, err := yahoo.FetchCompanyData(symbol, peerSymbols)
-		if err != nil {
-			log.Printf("warning: could not fetch company data for %s: %v", symbol, err)
-		} else if err := st.SetCompanyData(symbol, companyData); err != nil {
-			log.Printf("warning: could not store company data for %s: %v", symbol, err)
-		} else {
-			log.Printf("stored company data for %s", symbol)
-		}
-	}
+	return count, nil
 }

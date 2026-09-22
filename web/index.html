@@ -60,6 +60,16 @@
     border-radius: 4px;
     padding: 1px 5px;
   }
+  header .hint { color: var(--muted); font-size: 12px; }
+  header .nav-link {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    padding: var(--space-2) var(--space-4);
+    border-radius: 8px;
+  }
+  header .nav-link:hover { border-color: var(--supply); }
 
   .hidden { display: none !important; }
   .palette-overlay {
@@ -103,7 +113,9 @@
     cursor: pointer;
     font-size: 14px;
   }
-  .palette-item .palette-hint { color: var(--muted); font-size: 12px; }
+  .palette-item .palette-main { display: flex; align-items: baseline; gap: var(--space-3); min-width: 0; }
+  .palette-item .palette-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .palette-item .palette-hint { color: var(--muted); font-size: 12px; flex-shrink: 0; }
   .palette-item.active, .palette-item:hover { background: rgba(33, 87, 243, 0.18); }
   .palette-empty { padding: var(--space-4) var(--space-5); color: var(--muted); font-size: 13px; }
   #refresh {
@@ -284,12 +296,14 @@
       <span id="symbol-switcher-text">Select ticker</span>
       <span class="kbd">Ctrl K</span>
     </button>
+    <span class="hint" title="Shift + scroll over the chart to jump to the next/previous tracked ticker">Shift+Scroll: next ticker</span>
+    <a class="nav-link" href="list.html">List view</a>
     <button id="refresh">Refresh data</button>
   </header>
 
   <div id="palette-overlay" class="palette-overlay hidden">
     <div class="palette">
-      <input id="palette-input" type="text" placeholder="Type a ticker…" autocomplete="off" spellcheck="false" />
+      <input id="palette-input" type="text" placeholder="Type a ticker or company name…" autocomplete="off" spellcheck="false" />
       <div id="palette-list" class="palette-list"></div>
     </div>
   </div>

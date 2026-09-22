@@ -3,6 +3,7 @@ package yahoo
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 )
 
@@ -11,6 +12,7 @@ import (
 // that symbol (e.g. no analyst PEG estimate).
 type Fundamentals struct {
 	PERatio          *float64 // trailing P/E
+	ForwardPERatio   *float64 // forward P/E, based on analyst EPS estimates
 	PEGRatio         *float64
 	RevenueGrowthPct *float64 // YoY revenue growth, as a percentage
 	NetMarginPct     *float64 // trailing net profit margin, as a percentage
@@ -23,7 +25,8 @@ type fundamentalsResponse struct {
 				TrailingPE quoteSummaryFloat `json:"trailingPE"`
 			} `json:"summaryDetail"`
 			DefaultKeyStatistics struct {
-				PegRatio quoteSummaryFloat `json:"pegRatio"`
+				PegRatio  quoteSummaryFloat `json:"pegRatio"`
+				ForwardPE quoteSummaryFloat `json:"forwardPE"`
 			} `json:"defaultKeyStatistics"`
 			FinancialData struct {
 				RevenueGrowth quoteSummaryFloat `json:"revenueGrowth"`
@@ -40,11 +43,17 @@ type fundamentalsResponse struct {
 // FetchFundamentals retrieves P/E, PEG, revenue growth, and net margin for
 // symbol from Yahoo Finance's quoteSummary API.
 func FetchFundamentals(symbol string) (Fundamentals, error) {
-	client, crumb, err := newAuthedClient()
+	client, crumb, err := NewAuthedClient()
 	if err != nil {
 		return Fundamentals{}, err
 	}
+	return FetchFundamentalsWithClient(client, crumb, symbol)
+}
 
+// FetchFundamentalsWithClient is FetchFundamentals against an already-authed
+// client/crumb pair, for callers fetching many symbols in a batch who want
+// to reuse one session instead of re-authenticating per symbol.
+func FetchFundamentalsWithClient(client *http.Client, crumb string, symbol string) (Fundamentals, error) {
 	dataURL := fmt.Sprintf(
 		"https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=defaultKeyStatistics,financialData,summaryDetail&crumb=%s",
 		symbol, url.QueryEscape(crumb),
@@ -67,8 +76,9 @@ func FetchFundamentals(symbol string) (Fundamentals, error) {
 
 	result := parsed.QuoteSummary.Result[0]
 	f := Fundamentals{
-		PERatio:  result.SummaryDetail.TrailingPE.Raw,
-		PEGRatio: result.DefaultKeyStatistics.PegRatio.Raw,
+		PERatio:        result.SummaryDetail.TrailingPE.Raw,
+		ForwardPERatio: result.DefaultKeyStatistics.ForwardPE.Raw,
+		PEGRatio:       result.DefaultKeyStatistics.PegRatio.Raw,
 	}
 	if v := result.FinancialData.RevenueGrowth.Raw; v != nil {
 		pct := *v * 100

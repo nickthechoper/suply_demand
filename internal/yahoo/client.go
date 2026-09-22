@@ -16,11 +16,11 @@ type quoteSummaryDate struct {
 	Fmt string `json:"fmt"`
 }
 
-// newAuthedClient performs the two-step handshake Yahoo's quoteSummary API
+// NewAuthedClient performs the two-step handshake Yahoo's quoteSummary API
 // requires (prime a session cookie, then exchange it for a crumb token) and
 // returns an http.Client whose cookie jar is ready to use alongside that
 // crumb on subsequent requests.
-func newAuthedClient() (*http.Client, string, error) {
+func NewAuthedClient() (*http.Client, string, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, "", err

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 
+	"supplydemand/internal/score"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
 	"supplydemand/internal/zones"
@@ -70,6 +71,7 @@ type zonesDTO struct {
 
 type fundamentalsDTO struct {
 	PERatio          *float64 `json:"peRatio"`
+	ForwardPERatio   *float64 `json:"forwardPERatio"`
 	PEGRatio         *float64 `json:"pegRatio"`
 	RevenueGrowthPct *float64 `json:"revenueGrowthPct"`
 	NetMarginPct     *float64 `json:"netMarginPct"`
@@ -88,8 +90,26 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/data", s.handleData)
 	mux.HandleFunc("/api/company", s.handleCompany)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/screener", s.handleScreener)
 	mux.Handle("/", http.FileServer(http.Dir(s.config.WebDir)))
 	return mux
+}
+
+// zonesFromBars computes supply/demand/equilibrium zones from the trailing
+// Lookback bars of the given (oldest-to-newest) bar slice.
+func (s *Server) zonesFromBars(bars []yahoo.Bar) zones.Result {
+	zoneSourceBars := bars
+	if len(zoneSourceBars) > s.config.Lookback {
+		zoneSourceBars = zoneSourceBars[len(zoneSourceBars)-s.config.Lookback:]
+	}
+	zoneBars := make([]zones.Bar, len(zoneSourceBars))
+	for i, b := range zoneSourceBars {
+		zoneBars[i] = zones.Bar{High: b.High, Low: b.Low, Volume: b.Volume}
+	}
+	return zones.Compute(zoneBars, zones.Params{
+		ThresholdPct: s.config.ThresholdPct,
+		Resolution:   s.config.Resolution,
+	})
 }
 
 // symbolFor resolves the requested ticker from the "symbol" query param
@@ -108,9 +128,25 @@ func (s *Server) symbolFor(r *http.Request) (symbol string, ok bool) {
 	return "", false
 }
 
+type symbolDTO struct {
+	Symbol string `json:"symbol"`
+	Name   string `json:"name"`
+}
+
 func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
+	infos, err := s.store.ListSymbolInfo()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	symbols := make([]symbolDTO, len(infos))
+	for i, info := range infos {
+		symbols[i] = symbolDTO{Symbol: info.Symbol, Name: info.Name}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"symbols": s.config.Symbols})
+	json.NewEncoder(w).Encode(map[string]any{"symbols": symbols})
 }
 
 // handleCompany returns the stored company profile, analyst targets,
@@ -174,19 +210,7 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 
 	// Zones are computed off the most recent Lookback bars, which may be a
 	// tail slice of the larger set served for display.
-	zoneSourceBars := bars
-	if len(zoneSourceBars) > s.config.Lookback {
-		zoneSourceBars = zoneSourceBars[len(zoneSourceBars)-s.config.Lookback:]
-	}
-	zoneBars := make([]zones.Bar, len(zoneSourceBars))
-	for i, b := range zoneSourceBars {
-		zoneBars[i] = zones.Bar{High: b.High, Low: b.Low, Volume: b.Volume}
-	}
-
-	result := zones.Compute(zoneBars, zones.Params{
-		ThresholdPct: s.config.ThresholdPct,
-		Resolution:   s.config.Resolution,
-	})
+	result := s.zonesFromBars(bars)
 
 	profileDTOs := make([]profileBinDTO, len(result.Profile))
 	for i, p := range result.Profile {
@@ -204,6 +228,7 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		Bars:   barDTOs,
 		Fundamentals: fundamentalsDTO{
 			PERatio:          fundamentals.PERatio,
+			ForwardPERatio:   fundamentals.ForwardPERatio,
 			PEGRatio:         fundamentals.PEGRatio,
 			RevenueGrowthPct: fundamentals.RevenueGrowthPct,
 			NetMarginPct:     fundamentals.NetMarginPct,
@@ -270,6 +295,10 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	} else if err := s.store.SetCompanyData(symbol, companyData); err != nil {
 		log.Printf("warning: could not store refreshed company data: %v", err)
 		companyDataFetched = false
+	} else if name := companyData.OwnName(symbol); name != "" {
+		if err := s.store.SetSymbolName(symbol, name); err != nil {
+			log.Printf("warning: could not store refreshed company name: %v", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -279,4 +308,119 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		"fundamentalsFetched": fundamentalsFetched,
 		"companyDataFetched":  companyDataFetched,
 	})
+}
+
+type screenerRowDTO struct {
+	Symbol             string   `json:"symbol"`
+	Name               string   `json:"name"`
+	Price              float64  `json:"price"`
+	ChangePct          float64  `json:"changePct"`
+	Zone               string   `json:"zone"` // "supply", "demand", or "none"
+	SupplyReached      bool     `json:"supplyReached"`
+	SupplyTop          float64  `json:"supplyTop"`
+	SupplyBtm          float64  `json:"supplyBtm"`
+	DemandReached      bool     `json:"demandReached"`
+	DemandTop          float64  `json:"demandTop"`
+	DemandBtm          float64  `json:"demandBtm"`
+	Score              float64  `json:"score"`
+	Qualified          bool     `json:"qualified"`
+	RecommendationMean *float64 `json:"recommendationMean"`
+	RecommendationKey  string   `json:"recommendationKey"`
+	TargetMean         *float64 `json:"targetMean"`
+	UpsidePct          *float64 `json:"upsidePct"`
+}
+
+// handleScreener returns every tracked symbol's latest price and current
+// supply/demand zone status, for the spreadsheet-style list view.
+func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
+	infos, err := s.store.ListSymbolInfo()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	rows := make([]screenerRowDTO, 0, len(infos))
+	for _, info := range infos {
+		bars, err := s.store.LatestBars(info.Symbol, s.config.Lookback)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(bars) == 0 {
+			continue
+		}
+
+		result := s.zonesFromBars(bars)
+		last := bars[len(bars)-1]
+
+		zone := "none"
+		switch {
+		case result.SupplyReached && last.Close >= result.SupplyBtm && last.Close <= result.SupplyTop:
+			zone = "supply"
+		case result.DemandReached && last.Close >= result.DemandBtm && last.Close <= result.DemandTop:
+			zone = "demand"
+		}
+
+		companyData, _, ok, err := s.store.CompanyData(info.Symbol)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var recommendationMean, targetMean *float64
+		var recommendationKey string
+		if ok {
+			recommendationMean = companyData.Analyst.RecommendationMean
+			recommendationKey = companyData.Analyst.RecommendationKey
+			targetMean = companyData.Analyst.TargetMean
+		}
+
+		fundamentals, _, _, err := s.store.Fundamentals(info.Symbol)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		scoreResult := score.Compute(score.Input{
+			Zone:               zone,
+			Price:              last.Close,
+			RecommendationMean: recommendationMean,
+			TargetMean:         targetMean,
+			PERatio:            fundamentals.PERatio,
+			PEGRatio:           fundamentals.PEGRatio,
+			RevenueGrowthPct:   fundamentals.RevenueGrowthPct,
+			NetMarginPct:       fundamentals.NetMarginPct,
+		})
+
+		row := screenerRowDTO{
+			Symbol:             info.Symbol,
+			Name:               info.Name,
+			Price:              last.Close,
+			SupplyReached:      result.SupplyReached,
+			SupplyTop:          result.SupplyTop,
+			SupplyBtm:          result.SupplyBtm,
+			DemandReached:      result.DemandReached,
+			DemandTop:          result.DemandTop,
+			DemandBtm:          result.DemandBtm,
+			Zone:               zone,
+			Score:              scoreResult.Total,
+			Qualified:          scoreResult.Qualified,
+			RecommendationMean: recommendationMean,
+			RecommendationKey:  recommendationKey,
+			TargetMean:         targetMean,
+			UpsidePct:          scoreResult.UpsidePct,
+		}
+		if len(bars) > 1 {
+			prev := bars[len(bars)-2]
+			if prev.Close != 0 {
+				row.ChangePct = (last.Close - prev.Close) / prev.Close * 100
+			}
+		}
+
+		rows = append(rows, row)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"rows": rows}); err != nil {
+		log.Printf("encoding /api/screener response: %v", err)
+	}
 }
