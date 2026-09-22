@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -50,6 +51,14 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("creating fundamentals table: %w", err)
 	}
 
+	// forward_pe_ratio was added after the fundamentals table shipped;
+	// back-fill it on existing databases that predate the column.
+	if _, err := db.Exec(`ALTER TABLE fundamentals ADD COLUMN forward_pe_ratio REAL`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("adding forward_pe_ratio column to fundamentals table: %w", err)
+		}
+	}
+
 	// Company data (profile, analyst targets, ownership, financials, filings,
 	// peer comparison) is a deeply nested, list-heavy structure that's only
 	// ever read and replaced wholesale, so it's stored as a JSON blob rather
@@ -62,6 +71,23 @@ func Open(path string) (*Store, error) {
 		)
 	`); err != nil {
 		return nil, fmt.Errorf("creating company_data table: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS symbols (
+			symbol   TEXT PRIMARY KEY,
+			added_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating symbols table: %w", err)
+	}
+
+	// name was added after the symbols table shipped; back-fill it on
+	// existing databases that predate the column.
+	if _, err := db.Exec(`ALTER TABLE symbols ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("adding name column to symbols table: %w", err)
+		}
 	}
 
 	return &Store{db: db}, nil
@@ -142,28 +168,29 @@ func (s *Store) LatestBars(symbol string, limit int) ([]yahoo.Bar, error) {
 // SetFundamentals upserts the fundamentals snapshot for symbol, stamped with the current time.
 func (s *Store) SetFundamentals(symbol string, f yahoo.Fundamentals) error {
 	_, err := s.db.Exec(`
-		INSERT INTO fundamentals (symbol, pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO fundamentals (symbol, pe_ratio, forward_pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(symbol) DO UPDATE SET
 			pe_ratio = excluded.pe_ratio,
+			forward_pe_ratio = excluded.forward_pe_ratio,
 			peg_ratio = excluded.peg_ratio,
 			revenue_growth_pct = excluded.revenue_growth_pct,
 			net_margin_pct = excluded.net_margin_pct,
 			fetched_at = excluded.fetched_at
-	`, symbol, f.PERatio, f.PEGRatio, f.RevenueGrowthPct, f.NetMarginPct, time.Now().Unix())
+	`, symbol, f.PERatio, f.ForwardPERatio, f.PEGRatio, f.RevenueGrowthPct, f.NetMarginPct, time.Now().Unix())
 	return err
 }
 
 // Fundamentals returns the stored fundamentals snapshot for symbol along with
 // when it was fetched. ok is false if nothing has been stored yet.
 func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt time.Time, ok bool, err error) {
-	var peRatio, pegRatio, revenueGrowthPct, netMarginPct sql.NullFloat64
+	var peRatio, forwardPERatio, pegRatio, revenueGrowthPct, netMarginPct sql.NullFloat64
 	var ts int64
 	row := s.db.QueryRow(`
-		SELECT pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at
+		SELECT pe_ratio, forward_pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at
 		FROM fundamentals WHERE symbol = ?
 	`, symbol)
-	if scanErr := row.Scan(&peRatio, &pegRatio, &revenueGrowthPct, &netMarginPct, &ts); scanErr != nil {
+	if scanErr := row.Scan(&peRatio, &forwardPERatio, &pegRatio, &revenueGrowthPct, &netMarginPct, &ts); scanErr != nil {
 		if scanErr == sql.ErrNoRows {
 			return f, time.Time{}, false, nil
 		}
@@ -171,6 +198,9 @@ func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt tim
 	}
 	if peRatio.Valid {
 		f.PERatio = &peRatio.Float64
+	}
+	if forwardPERatio.Valid {
+		f.ForwardPERatio = &forwardPERatio.Float64
 	}
 	if pegRatio.Valid {
 		f.PEGRatio = &pegRatio.Float64
@@ -216,6 +246,77 @@ func (s *Store) CompanyData(symbol string) (data yahoo.CompanyData, fetchedAt ti
 		return data, time.Time{}, false, fmt.Errorf("decoding stored company data: %w", err)
 	}
 	return data, time.Unix(ts, 0).UTC(), true, nil
+}
+
+// UpsertSymbol adds symbol to the tracked list if it isn't already there.
+func (s *Store) UpsertSymbol(symbol string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO symbols (symbol, added_at) VALUES (?, ?)
+		ON CONFLICT(symbol) DO NOTHING
+	`, symbol, time.Now().Unix())
+	return err
+}
+
+// ListSymbols returns every tracked symbol, alphabetically.
+func (s *Store) ListSymbols() ([]string, error) {
+	rows, err := s.db.Query(`SELECT symbol FROM symbols ORDER BY symbol`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var symbols []string
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, err
+		}
+		symbols = append(symbols, symbol)
+	}
+	return symbols, rows.Err()
+}
+
+// SymbolInfo pairs a tracked ticker with its company name, if known.
+type SymbolInfo struct {
+	Symbol string
+	Name   string
+}
+
+// ListSymbolInfo returns every tracked symbol with its company name,
+// alphabetically by symbol. Name is empty until SetSymbolName has been
+// called for that symbol.
+func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
+	rows, err := s.db.Query(`SELECT symbol, name FROM symbols ORDER BY symbol`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var infos []SymbolInfo
+	for rows.Next() {
+		var info SymbolInfo
+		if err := rows.Scan(&info.Symbol, &info.Name); err != nil {
+			return nil, err
+		}
+		infos = append(infos, info)
+	}
+	return infos, rows.Err()
+}
+
+// SetSymbolName records the company name for an already-tracked symbol.
+func (s *Store) SetSymbolName(symbol, name string) error {
+	_, err := s.db.Exec(`UPDATE symbols SET name = ? WHERE symbol = ?`, name, symbol)
+	return err
+}
+
+// SymbolName returns the stored company name for symbol, or "" if unknown.
+func (s *Store) SymbolName(symbol string) (string, error) {
+	var name string
+	err := s.db.QueryRow(`SELECT name FROM symbols WHERE symbol = ?`, symbol).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return name, err
 }
 
 // LatestTimestamp returns the most recent bar timestamp stored for symbol, or the zero time if none.

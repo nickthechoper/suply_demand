@@ -413,7 +413,13 @@ function updateFundamentals(f) {
   const revEl = document.getElementById('fund-rev-growth');
   const marginEl = document.getElementById('fund-net-margin');
 
-  peEl.textContent = f && f.peRatio != null ? f.peRatio.toFixed(2) : 'n/a';
+  if (f && f.peRatio != null) {
+    peEl.textContent = f.peRatio.toFixed(2);
+  } else if (f && f.forwardPERatio != null) {
+    peEl.textContent = `${f.forwardPERatio.toFixed(2)} (fwd)`;
+  } else {
+    peEl.textContent = 'n/a';
+  }
   pegEl.textContent = f && f.pegRatio != null ? f.pegRatio.toFixed(2) : 'n/a';
 
   if (f && f.revenueGrowthPct != null) {
@@ -809,6 +815,9 @@ async function switchSymbol(symbol) {
   if (symbol === currentSymbol) return;
   currentSymbol = symbol;
   activeRange = '2Y';
+  const url = new URL(window.location);
+  url.searchParams.set('symbol', symbol);
+  window.history.replaceState({}, '', url);
   await loadData();
   await loadCompanyData();
 }
@@ -832,22 +841,34 @@ function closePalette() {
   paletteOverlayEl.classList.add('hidden');
 }
 
+const PALETTE_BROWSE_LIMIT = 50;
+
 function renderPaletteMatches(query) {
-  const q = query.trim().toUpperCase();
-  paletteMatches = q
-    ? trackedSymbols.filter(s => s.includes(q))
-    : trackedSymbols;
+  const q = query.trim().toLowerCase();
   paletteActiveIndex = 0;
 
+  if (!q && trackedSymbols.length > PALETTE_BROWSE_LIMIT) {
+    paletteMatches = [];
+    paletteListEl.innerHTML = `<div class="palette-empty">Type to search ${trackedSymbols.length} tickers…</div>`;
+    return;
+  }
+
+  paletteMatches = q
+    ? trackedSymbols.filter(s => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
+    : trackedSymbols;
+
   if (!paletteMatches.length) {
-    paletteListEl.innerHTML = `<div class="palette-empty">No tracked ticker matches "${query}".</div>`;
+    paletteListEl.innerHTML = `<div class="palette-empty">No tracked ticker or company matches "${query}".</div>`;
     return;
   }
 
   paletteListEl.innerHTML = paletteMatches.map((s, i) => `
-    <div class="palette-item${i === paletteActiveIndex ? ' active' : ''}" data-symbol="${s}">
-      <span class="palette-symbol">${s}</span>
-      ${s === currentSymbol ? '<span class="palette-hint">current</span>' : ''}
+    <div class="palette-item${i === paletteActiveIndex ? ' active' : ''}" data-symbol="${s.symbol}">
+      <span class="palette-main">
+        <span class="palette-symbol">${s.symbol}</span>
+        ${s.name ? `<span class="palette-name">${s.name}</span>` : ''}
+      </span>
+      ${s.symbol === currentSymbol ? '<span class="palette-hint">current</span>' : ''}
     </div>
   `).join('');
 }
@@ -863,10 +884,10 @@ function setPaletteActive(index) {
 }
 
 function selectPaletteActive() {
-  const symbol = paletteMatches[paletteActiveIndex];
-  if (!symbol) return;
+  const match = paletteMatches[paletteActiveIndex];
+  if (!match) return;
   closePalette();
-  switchSymbol(symbol);
+  switchSymbol(match.symbol);
 }
 
 document.getElementById('symbol-switcher').addEventListener('click', openPalette);
@@ -911,11 +932,37 @@ window.addEventListener('keydown', e => {
   }
 });
 
+// --- Shift+wheel ticker cycling ------------------------------------------
+
+const WHEEL_CYCLE_COOLDOWN_MS = 350;
+let lastWheelCycleAt = 0;
+
+function cycleSymbol(direction) {
+  if (!trackedSymbols.length) return;
+  const idx = trackedSymbols.findIndex(s => s.symbol === currentSymbol);
+  const nextIdx = ((idx === -1 ? 0 : idx) + direction + trackedSymbols.length) % trackedSymbols.length;
+  switchSymbol(trackedSymbols[nextIdx].symbol);
+}
+
+function onShiftWheelCycle(e) {
+  if (!e.shiftKey) return;
+  e.preventDefault();
+  const now = Date.now();
+  if (now - lastWheelCycleAt < WHEEL_CYCLE_COOLDOWN_MS) return;
+  lastWheelCycleAt = now;
+  cycleSymbol(e.deltaY > 0 ? 1 : -1);
+}
+
+chartWrapEl.addEventListener('wheel', onShiftWheelCycle, { passive: false });
+
 async function init() {
   const resp = await fetch('/api/symbols');
   const data = await resp.json();
   trackedSymbols = data.symbols || [];
-  currentSymbol = trackedSymbols[0] || '';
+
+  const requested = new URLSearchParams(window.location.search).get('symbol');
+  const requestedValid = requested && trackedSymbols.some(s => s.symbol === requested);
+  currentSymbol = requestedValid ? requested : (trackedSymbols[0] && trackedSymbols[0].symbol) || '';
 
   await loadData();
   await loadCompanyData();
