@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -47,6 +48,20 @@ func Open(path string) (*Store, error) {
 		)
 	`); err != nil {
 		return nil, fmt.Errorf("creating fundamentals table: %w", err)
+	}
+
+	// Company data (profile, analyst targets, ownership, financials, filings,
+	// peer comparison) is a deeply nested, list-heavy structure that's only
+	// ever read and replaced wholesale, so it's stored as a JSON blob rather
+	// than normalized across many tables.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS company_data (
+			symbol     TEXT PRIMARY KEY,
+			data       TEXT NOT NULL,
+			fetched_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating company_data table: %w", err)
 	}
 
 	return &Store{db: db}, nil
@@ -167,6 +182,40 @@ func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt tim
 		f.NetMarginPct = &netMarginPct.Float64
 	}
 	return f, time.Unix(ts, 0).UTC(), true, nil
+}
+
+// SetCompanyData upserts the company data snapshot for symbol, stamped with the current time.
+func (s *Store) SetCompanyData(symbol string, data yahoo.CompanyData) error {
+	blob, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("encoding company data: %w", err)
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO company_data (symbol, data, fetched_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET
+			data = excluded.data,
+			fetched_at = excluded.fetched_at
+	`, symbol, string(blob), time.Now().Unix())
+	return err
+}
+
+// CompanyData returns the stored company data snapshot for symbol along with
+// when it was fetched. ok is false if nothing has been stored yet.
+func (s *Store) CompanyData(symbol string) (data yahoo.CompanyData, fetchedAt time.Time, ok bool, err error) {
+	var blob string
+	var ts int64
+	row := s.db.QueryRow(`SELECT data, fetched_at FROM company_data WHERE symbol = ?`, symbol)
+	if scanErr := row.Scan(&blob, &ts); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			return data, time.Time{}, false, nil
+		}
+		return data, time.Time{}, false, scanErr
+	}
+	if err := json.Unmarshal([]byte(blob), &data); err != nil {
+		return data, time.Time{}, false, fmt.Errorf("decoding stored company data: %w", err)
+	}
+	return data, time.Unix(ts, 0).UTC(), true, nil
 }
 
 // LatestTimestamp returns the most recent bar timestamp stored for symbol, or the zero time if none.
