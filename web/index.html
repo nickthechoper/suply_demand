@@ -39,8 +39,74 @@
   }
   header h1 { font-size: 18px; margin: 0; }
   header .symbol { color: var(--muted); font-size: 14px; }
-  #refresh {
+  #symbol-switcher {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  #symbol-switcher:hover { border-color: var(--supply); }
+  #symbol-switcher .kbd {
+    font-size: 10px;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .hidden { display: none !important; }
+  .palette-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 50;
+    display: flex;
+    justify-content: center;
+    padding-top: 12vh;
+  }
+  .palette {
+    width: 480px;
+    max-width: 90vw;
+    max-height: 70vh;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+  }
+  #palette-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-size: 16px;
+    padding: var(--space-4) var(--space-5);
+    outline: none;
+  }
+  .palette-list { overflow-y: auto; }
+  .palette-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3) var(--space-5);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .palette-item .palette-hint { color: var(--muted); font-size: 12px; }
+  .palette-item.active, .palette-item:hover { background: rgba(33, 87, 243, 0.18); }
+  .palette-empty { padding: var(--space-4) var(--space-5); color: var(--muted); font-size: 13px; }
+  #refresh {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
@@ -75,6 +141,22 @@
   .range-btn .range-pct { font-size: 10px; font-weight: 600; color: var(--muted); }
   #chart-wrap { position: relative; width: 100%; height: 62vh; overflow: hidden; }
   #chart { width: 100%; height: 100%; }
+
+  .indicator-wrap { position: relative; width: 100%; height: 240px; border-top: 1px solid var(--border); overflow: hidden; }
+  .indicator-chart { width: 100%; height: 100%; }
+  .indicator-legend {
+    position: absolute;
+    top: 6px;
+    left: 12px;
+    z-index: 6;
+    pointer-events: none;
+    font-size: 11px;
+    line-height: 1.5;
+    text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9);
+    white-space: nowrap;
+  }
+  .indicator-legend .legend-name { color: var(--muted); margin-right: 8px; }
+  .indicator-legend .legend-value { font-weight: 600; margin-right: 10px; }
   .zone-box {
     position: absolute;
     left: 0;
@@ -146,6 +228,7 @@
     padding: var(--space-5) var(--space-5);
   }
   .company-card.wide { grid-column: 1 / -1; }
+  .company-card.double-wide { grid-column: span 2; }
   .company-card h3 {
     font-size: 13px;
     margin: 0 0 var(--space-4);
@@ -174,8 +257,7 @@
   .company-card th { color: var(--muted); font-weight: 600; }
   .company-card td.highlight { color: var(--supply); font-weight: 600; }
   .company-card tr.highlight-row td { background: rgba(33, 87, 243, 0.1); }
-  .company-card .scroll-list { max-height: 240px; overflow-y: auto; padding-right: 4px; }
-  .company-card .summary-text { font-size: 12px; line-height: 1.6; color: var(--muted); max-height: 140px; overflow-y: auto; margin-top: var(--space-3); }
+  .company-card .summary-text { font-size: 12px; line-height: 1.6; color: var(--muted); margin-top: var(--space-3); }
   .company-card .empty-note { font-size: 12px; color: var(--muted); font-style: italic; }
   .company-card a { color: var(--supply); text-decoration: none; }
   .company-card a:hover { text-decoration: underline; }
@@ -198,8 +280,19 @@
   <header>
     <h1>Supply &amp; Demand Dashboard</h1>
     <span class="symbol" id="symbol-label">loading…</span>
+    <button id="symbol-switcher" title="Switch ticker">
+      <span id="symbol-switcher-text">Select ticker</span>
+      <span class="kbd">Ctrl K</span>
+    </button>
     <button id="refresh">Refresh data</button>
   </header>
+
+  <div id="palette-overlay" class="palette-overlay hidden">
+    <div class="palette">
+      <input id="palette-input" type="text" placeholder="Type a ticker…" autocomplete="off" spellcheck="false" />
+      <div id="palette-list" class="palette-list"></div>
+    </div>
+  </div>
 
   <div id="range-bar">
     <button class="range-btn" data-range="1D"><span>1D</span><span class="range-pct" data-pct="1D">–</span></button>
@@ -233,6 +326,31 @@
     </table>
   </div>
 
+  <div id="atr-wrap" class="indicator-wrap">
+    <div id="atr-chart" class="indicator-chart"></div>
+    <div class="indicator-legend">
+      <span class="legend-name">ATR 14 RMA</span>
+      <span class="legend-value" id="legend-atr" style="color:#ef5350">–</span>
+    </div>
+  </div>
+
+  <div id="rsi-wrap" class="indicator-wrap">
+    <div id="rsi-chart" class="indicator-chart"></div>
+    <div class="indicator-legend">
+      <span class="legend-name">RSI 14 close</span>
+      <span class="legend-value" id="legend-rsi" style="color:#b39ddb">–</span>
+      <span class="legend-value" id="legend-rsi-ma" style="color:#ffd54f">–</span>
+    </div>
+  </div>
+
+  <div id="rsi-diff-wrap" class="indicator-wrap">
+    <div id="rsi-diff-chart" class="indicator-chart"></div>
+    <div class="indicator-legend">
+      <span class="legend-name">RSI MA Difference 14 14</span>
+      <span class="legend-value" id="legend-rsi-diff">–</span>
+    </div>
+  </div>
+
   <div id="status"></div>
 
   <div id="company-section">
@@ -246,11 +364,6 @@
       <div id="peers-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card wide" id="card-profile">
-      <h3>Company Profile</h3>
-      <div id="profile-body"><span class="empty-note">Loading…</span></div>
-    </div>
-
     <div class="company-card wide" id="card-ownership">
       <h3>Ownership</h3>
       <div id="ownership-body"><span class="empty-note">Loading…</span></div>
@@ -259,6 +372,11 @@
     <div class="company-card" id="card-financials">
       <h3>Financial Statements</h3>
       <div id="financials-body"><span class="empty-note">Loading…</span></div>
+    </div>
+
+    <div class="company-card double-wide" id="card-insider">
+      <h3>Recent Insider Transactions</h3>
+      <div id="insider-body"><span class="empty-note">Loading…</span></div>
     </div>
 
     <div class="company-card" id="card-filings">

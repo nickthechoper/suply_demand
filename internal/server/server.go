@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -12,13 +13,13 @@ import (
 )
 
 type Config struct {
-	Symbol       string
-	Lookback     int // number of most recent bars used to compute supply/demand zones
-	ChartBars    int // number of most recent bars served for display (>= Lookback, gives range buttons like 2Y room to work)
+	Symbols      []string // tracked tickers; the first is the default
+	Lookback     int      // number of most recent bars used to compute supply/demand zones
+	ChartBars    int      // number of most recent bars served for display (>= Lookback, gives range buttons like 2Y room to work)
 	ThresholdPct float64
 	Resolution   int
 	WebDir       string
-	Peers        []string // peer tickers used for P/E comparison
+	Peers        map[string][]string // peer tickers used for P/E comparison, keyed by symbol
 }
 
 type Server struct {
@@ -83,6 +84,7 @@ type dataResponse struct {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/symbols", s.handleSymbols)
 	mux.HandleFunc("/api/data", s.handleData)
 	mux.HandleFunc("/api/company", s.handleCompany)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
@@ -90,11 +92,37 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
+// symbolFor resolves the requested ticker from the "symbol" query param
+// against the configured symbol list, defaulting to the first configured
+// symbol when the param is absent. ok is false if an unknown symbol was requested.
+func (s *Server) symbolFor(r *http.Request) (symbol string, ok bool) {
+	requested := r.URL.Query().Get("symbol")
+	if requested == "" {
+		return s.config.Symbols[0], true
+	}
+	for _, sym := range s.config.Symbols {
+		if sym == requested {
+			return sym, true
+		}
+	}
+	return "", false
+}
+
+func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"symbols": s.config.Symbols})
+}
+
 // handleCompany returns the stored company profile, analyst targets,
-// ownership, financials, filings, and peer comparison for the configured
+// ownership, financials, filings, and peer comparison for the requested
 // symbol.
 func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
-	data, _, ok, err := s.store.CompanyData(s.config.Symbol)
+	symbol, ok := s.symbolFor(r)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown symbol %q", r.URL.Query().Get("symbol")), http.StatusBadRequest)
+		return
+	}
+	data, _, ok, err := s.store.CompanyData(symbol)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -111,12 +139,18 @@ func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
+	symbol, ok := s.symbolFor(r)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown symbol %q", r.URL.Query().Get("symbol")), http.StatusBadRequest)
+		return
+	}
+
 	displayLimit := s.config.ChartBars
 	if displayLimit < s.config.Lookback {
 		displayLimit = s.config.Lookback
 	}
 
-	bars, err := s.store.LatestBars(s.config.Symbol, displayLimit)
+	bars, err := s.store.LatestBars(symbol, displayLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -159,14 +193,14 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		profileDTOs[i] = profileBinDTO{Low: p.Low, High: p.High, Volume: p.Volume}
 	}
 
-	fundamentals, _, _, err := s.store.Fundamentals(s.config.Symbol)
+	fundamentals, _, _, err := s.store.Fundamentals(symbol)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	resp := dataResponse{
-		Symbol: s.config.Symbol,
+		Symbol: symbol,
 		Bars:   barDTOs,
 		Fundamentals: fundamentalsDTO{
 			PERatio:          fundamentals.PERatio,
@@ -200,41 +234,47 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRefresh re-fetches the full daily history and fundamentals for the
-// configured symbol from Yahoo Finance and upserts them into the store.
+// requested symbol from Yahoo Finance and upserts them into the store.
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	bars, err := yahoo.FetchDaily(s.config.Symbol, "5y")
+	symbol, ok := s.symbolFor(r)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown symbol %q", r.URL.Query().Get("symbol")), http.StatusBadRequest)
+		return
+	}
+
+	bars, err := yahoo.FetchDaily(symbol, "5y")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if err := s.store.UpsertBars(s.config.Symbol, bars); err != nil {
+	if err := s.store.UpsertBars(symbol, bars); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	fundamentalsFetched := true
-	fundamentals, err := yahoo.FetchFundamentals(s.config.Symbol)
+	fundamentals, err := yahoo.FetchFundamentals(symbol)
 	if err != nil {
 		log.Printf("warning: could not refresh fundamentals: %v", err)
 		fundamentalsFetched = false
-	} else if err := s.store.SetFundamentals(s.config.Symbol, fundamentals); err != nil {
+	} else if err := s.store.SetFundamentals(symbol, fundamentals); err != nil {
 		log.Printf("warning: could not store refreshed fundamentals: %v", err)
 		fundamentalsFetched = false
 	}
 
 	companyDataFetched := true
-	companyData, err := yahoo.FetchCompanyData(s.config.Symbol, s.config.Peers)
+	companyData, err := yahoo.FetchCompanyData(symbol, s.config.Peers[symbol])
 	if err != nil {
 		log.Printf("warning: could not refresh company data: %v", err)
 		companyDataFetched = false
-	} else if err := s.store.SetCompanyData(s.config.Symbol, companyData); err != nil {
+	} else if err := s.store.SetCompanyData(symbol, companyData); err != nil {
 		log.Printf("warning: could not store refreshed company data: %v", err)
 		companyDataFetched = false
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"symbol":              s.config.Symbol,
+		"symbol":              symbol,
 		"barsFetched":         len(bars),
 		"fundamentalsFetched": fundamentalsFetched,
 		"companyDataFetched":  companyDataFetched,

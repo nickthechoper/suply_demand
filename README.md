@@ -1,9 +1,10 @@
 # Supply & Demand Dashboard
 
 A local Go replacement for LuxAlgo's "Supply and Demand Fixed Range" Pine Script
-indicator. Fetches daily OHLCV data for a ticker (default: MCD) from Yahoo
-Finance, stores it in SQLite, computes volume-based supply/demand/equilibrium
-zones, and serves a candlestick dashboard in the browser.
+indicator. Fetches daily OHLCV data for one or more tickers (default: MCD, GRAB)
+from Yahoo Finance, stores it in SQLite, computes volume-based supply/demand/
+equilibrium zones, and serves a candlestick dashboard in the browser with a
+ticker selector to switch between them.
 
 ## Run
 
@@ -15,7 +16,7 @@ Then open http://localhost:8080
 
 ## Flags
 
-- `-symbol` (default `MCD`) — ticker to track
+- `-symbols` (default `MCD,GRAB`) — comma-separated tickers to track
 - `-lookback` (default `500`) — number of most recent daily bars used to build zones
 - `-threshold` (default `10.0`) — volume %% that defines a zone edge
 - `-resolution` (default `50`) — number of price bins spanning the lookback range
