@@ -49,6 +49,22 @@ func main() {
 		}
 	}
 
+	_, fundamentalsFetchedAt, haveFundamentals, err := st.Fundamentals(*symbol)
+	if err != nil {
+		log.Fatalf("checking stored fundamentals: %v", err)
+	}
+	if !haveFundamentals || time.Since(fundamentalsFetchedAt) > 20*time.Hour {
+		log.Printf("fetching %s fundamentals from Yahoo Finance...", *symbol)
+		fundamentals, err := yahoo.FetchFundamentals(*symbol)
+		if err != nil {
+			log.Printf("warning: could not fetch fundamentals: %v", err)
+		} else if err := st.SetFundamentals(*symbol, fundamentals); err != nil {
+			log.Printf("warning: could not store fundamentals: %v", err)
+		} else {
+			log.Printf("stored fundamentals for %s", *symbol)
+		}
+	}
+
 	srv := server.New(st, server.Config{
 		Symbol:       *symbol,
 		Lookback:     *lookback,

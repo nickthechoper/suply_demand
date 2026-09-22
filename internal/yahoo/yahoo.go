@@ -1,4 +1,5 @@
-// Package yahoo fetches daily OHLCV bars from Yahoo Finance's public chart API.
+// Package yahoo fetches daily OHLCV bars and fundamentals from Yahoo
+// Finance's public (unofficial) APIs.
 package yahoo
 
 import (
@@ -8,6 +9,8 @@ import (
 	"net/http"
 	"time"
 )
+
+const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 type Bar struct {
 	Time   time.Time
@@ -51,7 +54,7 @@ func FetchDaily(symbol, rangeStr string) ([]Bar, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; supplydemand-dashboard/1.0)")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

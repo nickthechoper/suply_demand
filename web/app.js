@@ -115,6 +115,32 @@ function updateLegend(bar, prevBar) {
   }
 }
 
+function updateFundamentals(f) {
+  const peEl = document.getElementById('fund-pe');
+  const pegEl = document.getElementById('fund-peg');
+  const revEl = document.getElementById('fund-rev-growth');
+  const marginEl = document.getElementById('fund-net-margin');
+
+  peEl.textContent = f && f.peRatio != null ? f.peRatio.toFixed(2) : 'n/a';
+  pegEl.textContent = f && f.pegRatio != null ? f.pegRatio.toFixed(2) : 'n/a';
+
+  if (f && f.revenueGrowthPct != null) {
+    revEl.textContent = `${f.revenueGrowthPct.toFixed(2)}%`;
+    revEl.style.color = f.revenueGrowthPct >= 0 ? '#26a69a' : '#ef5350';
+  } else {
+    revEl.textContent = 'n/a';
+    revEl.style.color = '';
+  }
+
+  if (f && f.netMarginPct != null) {
+    marginEl.textContent = `${f.netMarginPct.toFixed(2)}%`;
+    marginEl.style.color = f.netMarginPct >= 0 ? '#26a69a' : '#ef5350';
+  } else {
+    marginEl.textContent = 'n/a';
+    marginEl.style.color = '';
+  }
+}
+
 chart.subscribeCrosshairMove(param => {
   if (!barsAscending.length) return;
   if (!param || !param.time) {
@@ -157,6 +183,7 @@ async function loadData() {
   })));
 
   updateLegend(barsAscending[barsAscending.length - 1], barsAscending[barsAscending.length - 2]);
+  updateFundamentals(data.fundamentals);
 
   const z = data.zones;
   currentZones = z;
@@ -175,29 +202,6 @@ async function loadData() {
       title: 'Equilibrium',
     });
   }
-
-  document.getElementById('supply-top').textContent = fmt(z.supplyTop);
-  document.getElementById('supply-btm').textContent = fmt(z.supplyBtm);
-  document.getElementById('supply-avg').textContent = fmt(z.supplyAvg);
-  document.getElementById('supply-wavg').textContent = fmt(z.supplyWavg);
-
-  document.getElementById('demand-top').textContent = fmt(z.demandTop);
-  document.getElementById('demand-btm').textContent = fmt(z.demandBtm);
-  document.getElementById('demand-avg').textContent = fmt(z.demandAvg);
-  document.getElementById('demand-wavg').textContent = fmt(z.demandWavg);
-
-  document.getElementById('equi-avg').textContent = fmt(z.equilibriumAvg);
-  document.getElementById('equi-wavg').textContent = fmt(z.equilibriumWavg);
-
-  const lastClose = data.bars.length ? data.bars[data.bars.length - 1].close : null;
-  document.getElementById('last-close').textContent = fmt(lastClose);
-
-  let position = 'Between zones';
-  if (lastClose !== null) {
-    if (z.supplyReached && lastClose >= z.supplyBtm && lastClose <= z.supplyTop) position = 'In supply zone';
-    else if (z.demandReached && lastClose <= z.demandTop && lastClose >= z.demandBtm) position = 'In demand zone';
-  }
-  document.getElementById('zone-position').textContent = position;
 
   if (activeRange) {
     applyRange(activeRange);
@@ -242,14 +246,17 @@ function updateAllRangePerformance() {
   }
 }
 
-// Fits the full loaded range and clears any interval selection.
+// Re-fits the chart to the currently selected interval (undoing any manual
+// pan/zoom) without changing which interval is selected. Falls back to the
+// full loaded range if no interval is active.
 function resetZoom() {
   if (!barsAscending.length) return;
-  chart.timeScale().fitContent();
-  activeRange = null;
-  document.querySelectorAll('.range-btn').forEach(btn => btn.classList.remove('active'));
-  document.getElementById('reset-zoom').classList.add('active');
-  scheduleZoneBoxUpdate();
+  if (activeRange) {
+    applyRange(activeRange);
+  } else {
+    chart.timeScale().fitContent();
+    scheduleZoneBoxUpdate();
+  }
 }
 
 function applyRange(rangeKey) {
@@ -260,14 +267,13 @@ function applyRange(rangeKey) {
   chart.timeScale().setVisibleRange({ from: startBar.time, to: lastBar.time });
 
   activeRange = rangeKey;
-  document.getElementById('reset-zoom').classList.remove('active');
   document.querySelectorAll('.range-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.range === rangeKey);
   });
   scheduleZoneBoxUpdate();
 }
 
-document.querySelectorAll('.range-btn').forEach(btn => {
+document.querySelectorAll('.range-btn[data-range]').forEach(btn => {
   btn.addEventListener('click', () => applyRange(btn.dataset.range));
 });
 
