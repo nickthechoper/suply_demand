@@ -4,6 +4,7 @@ const fetchEl = document.getElementById('fetch');
 const recentEl = document.getElementById('recent');
 const resultEl = document.getElementById('result');
 const chartLinkEl = document.getElementById('chart-link');
+const listLinkEl = document.getElementById('list-link');
 
 const TYPES = {
   P: { label: 'Purchase', kind: 'buy', color: '#26a69a' },
@@ -91,6 +92,14 @@ function daysAgo(date) {
   return n <= 0 ? 'today' : n === 1 ? 'yesterday' : `${n} days ago`;
 }
 
+function timeAgo(unix) {
+  const mins = Math.round((Date.now() / 1000 - unix) / 60);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+}
+
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
@@ -142,7 +151,8 @@ async function loadTracked() {
 }
 
 function updateChartLink() {
-  chartLinkEl.href = trackedNames.has(symbol) ? `index.html?symbol=${encodeURIComponent(symbol)}` : 'index.html';
+  chartLinkEl.href = trackedNames.has(symbol) ? `chart.html?symbol=${encodeURIComponent(symbol)}` : 'chart.html';
+  listLinkEl.href = symbol ? `list.html?symbol=${encodeURIComponent(symbol)}` : 'list.html';
 }
 
 function suggestionButtons() {
@@ -169,7 +179,7 @@ function renderLoading() {
   destroyChart();
   resultEl.innerHTML = `
     <div class="skeleton" aria-busy="true">
-      <div class="status"><span class="spin"></span>Fetching ${esc(symbol)} filings from OpenInsider… this can take 10–20 seconds.</div>
+      <div class="status"><span class="spin"></span>Loading ${esc(symbol)} filings…${trackedNames.has(symbol) ? '' : ' this can take 10–20 seconds.'}</div>
       <div class="sk" style="height:38px;width:280px"></div>
       <div class="sk" style="height:58px"></div>
       <div class="sk-row">${'<div class="sk" style="height:84px"></div>'.repeat(4)}</div>
@@ -242,7 +252,7 @@ function prepare(json) {
     const flags = t.flags || '';
     return { ...t, id: i, label: meta.label, kind: meta.kind, color: meta.color, suspect: flags.includes('E'), amended: flags.includes('A'), bar: snapToBar(toTime(t.tradeDate)) };
   });
-  return { name: json.name || trackedNames.get(json.symbol) || '', trades, prices };
+  return { name: json.name || trackedNames.get(json.symbol) || '', trades, prices, fetchedAt: json.fetchedAt || 0 };
 }
 
 function snapToBar(t) {
@@ -398,7 +408,7 @@ function renderResult() {
       </div>
     </section>` : ''}
 
-    <p class="source">Source: OpenInsider (SEC Form 4), cached for 10 minutes. Purchases and sales are open-market trades; option exercises, tax withholding, grants and gifts are routine compensation events. ⚠ marks filings OpenInsider flagged as containing an error.</p>
+    <p class="source">Source: OpenInsider (SEC Form 4), ${data.fetchedAt ? `refreshed in the background, last updated ${timeAgo(data.fetchedAt)}` : 'fetched on demand and cached for 10 minutes'}. Purchases and sales are open-market trades; option exercises, tax withholding, grants and gifts are routine compensation events. ⚠ marks filings OpenInsider flagged as containing an error.</p>
   `;
 
   if (data.prices.length) buildChart();

@@ -33,6 +33,7 @@
     --radius: 10px;
   }
   * { box-sizing: border-box; }
+  html { scrollbar-gutter: stable; }
   body {
     margin: 0;
     font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -49,13 +50,17 @@
 
   header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--space-3);
-    padding: var(--space-4) var(--space-6);
+    height: 68px;
+    padding: 0 var(--space-6);
     border-bottom: 1px solid var(--border);
   }
   header h1 { font-size: 18px; margin: 0; }
+  header .page-nav { display: flex; gap: var(--space-3); margin-left: auto; flex-shrink: 0; }
   header .nav-link {
+    line-height: 18px;
+    white-space: nowrap;
     color: var(--text);
     text-decoration: none;
     font-size: 13px;
@@ -63,9 +68,8 @@
     padding: var(--space-2) var(--space-4);
     border-radius: 8px;
   }
-  header .nav-link:first-of-type { margin-left: auto; }
   header .nav-link:hover { border-color: var(--supply); }
-  header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; }
+  header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; cursor: default; user-select: none; }
 
   main { max-width: 1440px; margin: 0 auto; padding: var(--space-5) var(--space-6) var(--space-6); }
 
@@ -407,7 +411,8 @@
   }
   @media (max-width: 760px) {
     header { flex-wrap: wrap; padding: var(--space-3) var(--space-4); }
-    header .nav-link:first-of-type { margin-left: 0; }
+    header { height: auto; }
+    header .page-nav { margin-left: 0; }
     main { padding: var(--space-4); }
     .kpis, .sk-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .verdict { flex-direction: column; align-items: flex-start; gap: var(--space-2); }
@@ -425,9 +430,11 @@
 <body>
   <header>
     <h1>Supply &amp; Demand Dashboard</h1>
-    <a class="nav-link" id="chart-link" href="index.html">Chart view</a>
-    <a class="nav-link" href="list.html">List view</a>
-    <a class="nav-link" href="insider.html" aria-current="page">Insider trades</a>
+    <nav class="page-nav">
+      <a class="nav-link" id="list-link" href="list.html">List view</a>
+      <a class="nav-link" id="chart-link" href="chart.html">Chart view</a>
+      <a class="nav-link" aria-current="page">Insider trades</a>
+    </nav>
   </header>
 
   <main>

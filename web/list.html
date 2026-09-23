@@ -21,6 +21,7 @@
     --space-6: 28px;
   }
   * { box-sizing: border-box; }
+  html { scrollbar-gutter: stable; }
   body {
     margin: 0;
     font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -29,14 +30,17 @@
   }
   header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--space-3);
-    padding: var(--space-4) var(--space-6);
+    height: 68px;
+    padding: 0 var(--space-6);
     border-bottom: 1px solid var(--border);
   }
   header h1 { font-size: 18px; margin: 0; }
-  header .nav-link:first-of-type { margin-left: auto; }
+  header .page-nav { display: flex; gap: var(--space-3); margin-left: auto; flex-shrink: 0; }
   header .nav-link {
+    line-height: 18px;
+    white-space: nowrap;
     color: var(--text);
     text-decoration: none;
     font-size: 13px;
@@ -45,6 +49,7 @@
     border-radius: 8px;
   }
   header .nav-link:hover { border-color: var(--supply); }
+  header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; cursor: default; user-select: none; }
 
   #toolbar {
     display: flex;
@@ -62,7 +67,7 @@
     font-size: 13px;
     width: 220px;
   }
-  .filter-btn {
+  .filter-btn, .modal-btn {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
@@ -71,12 +76,12 @@
     cursor: pointer;
     font-size: 13px;
   }
-  .filter-btn:hover { border-color: var(--supply); }
+  .filter-btn:hover, .modal-btn:hover { border-color: var(--supply); }
   .filter-btn.active { background: var(--supply); border-color: var(--supply); color: #fff; }
   #count { color: var(--muted); font-size: 12px; margin-left: auto; }
 
-  #table-wrap { padding: var(--space-5) var(--space-6); overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  #table-wrap { padding: var(--space-5) 0; overflow-x: auto; }
+  table { border-collapse: collapse; width: calc(100% - 2 * var(--space-6)); margin: 0 var(--space-6); font-size: 13px; }
   thead th {
     position: sticky;
     top: 0;
@@ -99,9 +104,22 @@
     white-space: nowrap;
   }
   tbody td:first-child, tbody td:nth-child(2) { text-align: left; }
-  tbody tr { cursor: pointer; }
   tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
   tbody tr:hover { background: rgba(33, 87, 243, 0.12); }
+  thead th:first-child, tbody td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    box-shadow: inset -1px 0 0 transparent, 4px 0 6px -4px transparent;
+    transition: box-shadow .15s ease;
+  }
+  #table-wrap.scrolled thead th:first-child, #table-wrap.scrolled tbody td:first-child {
+    box-shadow: inset -1px 0 0 var(--border), 4px 0 6px -4px rgba(0,0,0,0.6);
+  }
+  thead th:first-child { z-index: 2; }
+  tbody td:first-child { background: var(--bg); }
+  tbody tr:nth-child(even) td:first-child { background: linear-gradient(rgba(255,255,255,0.02), rgba(255,255,255,0.02)), var(--bg); }
+  tbody tr:hover td:first-child { background: linear-gradient(rgba(33, 87, 243, 0.12), rgba(33, 87, 243, 0.12)), var(--bg); }
   td.symbol { font-weight: 700; }
   td.name { color: var(--muted); }
   .zone-pill {
@@ -114,6 +132,8 @@
   .zone-pill.supply { background: rgba(33, 87, 243, 0.22); color: #6f96ff; }
   .zone-pill.demand { background: rgba(255, 93, 0, 0.22); color: #ff9c5c; }
   .zone-pill.none { background: rgba(255,255,255,0.06); color: var(--muted); }
+  .cell-link { color: inherit; text-decoration: none; }
+  .cell-link:hover { text-decoration: underline; }
   .pos { color: #26a69a; }
   .neg { color: #ef5350; }
   .score-pill {
@@ -138,6 +158,68 @@
     color: #ef8b88;
     margin: 1px;
   }
+  thead th[data-key="note"] { text-align: left; }
+  td.note-cell { text-align: left; max-width: 240px; }
+  .note-btn {
+    display: block;
+    width: 100%;
+    max-width: 240px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text);
+    padding: var(--space-1) var(--space-2);
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .note-btn:hover { border-color: var(--supply); }
+  .note-btn.empty { color: var(--muted); opacity: 0.5; }
+
+  #note-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #note-dialog {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: var(--space-5);
+    width: min(520px, calc(100vw - 32px));
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  #note-title { margin: 0; font-size: 15px; }
+  #note-title .muted { color: var(--muted); font-weight: 400; }
+  #note-text {
+    width: 100%;
+    min-height: 160px;
+    resize: vertical;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: var(--space-3);
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.5;
+  }
+  #note-text:focus { outline: none; border-color: var(--supply); }
+  #note-actions { display: flex; align-items: center; gap: var(--space-2); }
+  #note-error { color: #ef5350; font-size: 12px; margin-right: auto; }
+  #note-hint { color: var(--muted); font-size: 11px; margin-right: auto; }
+  #note-save { background: var(--supply); border-color: var(--supply); color: #fff; }
+  #note-save:disabled { opacity: 0.6; cursor: default; }
   #empty-note { padding: var(--space-6); color: var(--muted); text-align: center; }
   .hidden { display: none !important; }
 </style>
@@ -145,12 +227,15 @@
 <body>
   <header>
     <h1>Supply &amp; Demand Dashboard</h1>
-    <a class="nav-link" href="index.html">Chart view</a>
-    <a class="nav-link" href="insider.html">Insider trades</a>
+    <nav class="page-nav">
+      <a class="nav-link" aria-current="page">List view</a>
+      <a class="nav-link" id="chart-link" href="chart.html">Chart view</a>
+      <a class="nav-link" id="insider-link" href="insider.html">Insider trades</a>
+    </nav>
   </header>
 
   <div id="toolbar">
-    <input id="search" type="text" placeholder="Filter by ticker or name…" autocomplete="off" spellcheck="false" />
+    <input id="search" type="text" placeholder="Filter by ticker, name or note…" autocomplete="off" spellcheck="false" />
     <button class="filter-btn active" data-zone="all">All</button>
     <button class="filter-btn" data-zone="demand">Demand Zone</button>
     <button class="filter-btn" data-zone="supply">Supply Zone</button>
@@ -174,13 +259,28 @@
           <th data-key="netMarginPct">Net Profit Margin</th>
           <th data-key="recommendationKey">Rating</th>
           <th data-key="upsidePct">Target Upside</th>
+          <th data-key="netOpenMarket" title="Open-market insider purchases minus sales over the last 12 months">Net Open-Market (12M)</th>
           <th data-key="score">Score</th>
           <th>Flags</th>
+          <th data-key="note">Note</th>
         </tr>
       </thead>
       <tbody id="table-body"></tbody>
     </table>
     <div id="empty-note" class="hidden">No tickers match.</div>
+  </div>
+
+  <div id="note-modal" class="hidden">
+    <div id="note-dialog" role="dialog" aria-modal="true" aria-labelledby="note-title">
+      <h2 id="note-title"></h2>
+      <textarea id="note-text" placeholder="Write a note…" spellcheck="false"></textarea>
+      <div id="note-actions">
+        <span id="note-hint">Ctrl+Enter to save · Esc to cancel</span>
+        <span id="note-error" class="hidden"></span>
+        <button id="note-cancel" class="modal-btn" type="button">Cancel</button>
+        <button id="note-save" class="modal-btn" type="button">Save</button>
+      </div>
+    </div>
   </div>
 
   <script src="list.js"></script>

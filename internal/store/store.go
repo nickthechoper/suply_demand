@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"supplydemand/internal/openinsider"
 	"supplydemand/internal/yahoo"
 )
 
@@ -101,6 +102,28 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
+	if _, err := db.Exec(`ALTER TABLE symbols ADD COLUMN bars_fetched_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("adding bars_fetched_at column to symbols table: %w", err)
+		}
+	}
+
+	if _, err := db.Exec(`ALTER TABLE symbols ADD COLUMN note TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("adding note column to symbols table: %w", err)
+		}
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS insider_trades (
+			symbol     TEXT PRIMARY KEY,
+			data       TEXT NOT NULL,
+			fetched_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating insider_trades table: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -135,6 +158,10 @@ func (s *Store) UpsertBars(symbol string, bars []yahoo.Bar) error {
 		if _, err := stmt.Exec(symbol, b.Time.Unix(), b.Open, b.High, b.Low, b.Close, b.Volume); err != nil {
 			return fmt.Errorf("upserting bar at %s: %w", b.Time, err)
 		}
+	}
+
+	if _, err := tx.Exec(`UPDATE symbols SET bars_fetched_at = ? WHERE symbol = ?`, time.Now().Unix(), symbol); err != nil {
+		return fmt.Errorf("stamping bars fetch time: %w", err)
 	}
 
 	return tx.Commit()
@@ -271,6 +298,37 @@ func (s *Store) CompanyData(symbol string) (data yahoo.CompanyData, fetchedAt ti
 	return data, time.Unix(ts, 0).UTC(), true, nil
 }
 
+func (s *Store) SetInsiderTrades(symbol string, trades []openinsider.Trade) error {
+	blob, err := json.Marshal(trades)
+	if err != nil {
+		return fmt.Errorf("encoding insider trades: %w", err)
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO insider_trades (symbol, data, fetched_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET
+			data = excluded.data,
+			fetched_at = excluded.fetched_at
+	`, symbol, string(blob), time.Now().Unix())
+	return err
+}
+
+func (s *Store) InsiderTrades(symbol string) (trades []openinsider.Trade, fetchedAt time.Time, ok bool, err error) {
+	var blob string
+	var ts int64
+	row := s.db.QueryRow(`SELECT data, fetched_at FROM insider_trades WHERE symbol = ?`, symbol)
+	if scanErr := row.Scan(&blob, &ts); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			return nil, time.Time{}, false, nil
+		}
+		return nil, time.Time{}, false, scanErr
+	}
+	if err := json.Unmarshal([]byte(blob), &trades); err != nil {
+		return nil, time.Time{}, false, fmt.Errorf("decoding stored insider trades: %w", err)
+	}
+	return trades, time.Unix(ts, 0).UTC(), true, nil
+}
+
 // UpsertSymbol adds symbol to the tracked list if it isn't already there.
 func (s *Store) UpsertSymbol(symbol string) error {
 	_, err := s.db.Exec(`
@@ -303,13 +361,14 @@ func (s *Store) ListSymbols() ([]string, error) {
 type SymbolInfo struct {
 	Symbol string
 	Name   string
+	Note   string
 }
 
 // ListSymbolInfo returns every tracked symbol with its company name,
 // alphabetically by symbol. Name is empty until SetSymbolName has been
 // called for that symbol.
 func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
-	rows, err := s.db.Query(`SELECT symbol, name FROM symbols ORDER BY symbol`)
+	rows, err := s.db.Query(`SELECT symbol, name, note FROM symbols ORDER BY symbol`)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +377,7 @@ func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
 	var infos []SymbolInfo
 	for rows.Next() {
 		var info SymbolInfo
-		if err := rows.Scan(&info.Symbol, &info.Name); err != nil {
+		if err := rows.Scan(&info.Symbol, &info.Name, &info.Note); err != nil {
 			return nil, err
 		}
 		infos = append(infos, info)
@@ -332,6 +391,15 @@ func (s *Store) SetSymbolName(symbol, name string) error {
 	return err
 }
 
+func (s *Store) SetSymbolNote(symbol, note string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE symbols SET note = ? WHERE symbol = ?`, note, symbol)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // SymbolName returns the stored company name for symbol, or "" if unknown.
 func (s *Store) SymbolName(symbol string) (string, error) {
 	var name string
@@ -342,15 +410,48 @@ func (s *Store) SymbolName(symbol string) (string, error) {
 	return name, err
 }
 
-// LatestTimestamp returns the most recent bar timestamp stored for symbol, or the zero time if none.
-func (s *Store) LatestTimestamp(symbol string) (time.Time, error) {
-	var ts sql.NullInt64
-	err := s.db.QueryRow(`SELECT MAX(ts) FROM bars WHERE symbol = ?`, symbol).Scan(&ts)
+type FetchTimes struct {
+	Symbol       string
+	Name         string
+	Bars         time.Time
+	Fundamentals time.Time
+	CompanyData  time.Time
+	Insider      time.Time
+}
+
+func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
+	rows, err := s.db.Query(`
+		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0)
+		FROM symbols s
+		LEFT JOIN fundamentals f ON f.symbol = s.symbol
+		LEFT JOIN company_data c ON c.symbol = s.symbol
+		LEFT JOIN insider_trades i ON i.symbol = s.symbol
+		ORDER BY s.symbol
+	`)
 	if err != nil {
-		return time.Time{}, err
+		return nil, err
 	}
-	if !ts.Valid {
-		return time.Time{}, nil
+	defer rows.Close()
+
+	var out []FetchTimes
+	for rows.Next() {
+		var ft FetchTimes
+		var bars, fundamentals, companyData, insider int64
+		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider); err != nil {
+			return nil, err
+		}
+		ft.Bars = unixOrZero(bars)
+		ft.Fundamentals = unixOrZero(fundamentals)
+		ft.CompanyData = unixOrZero(companyData)
+		ft.Insider = unixOrZero(insider)
+		out = append(out, ft)
 	}
-	return time.Unix(ts.Int64, 0).UTC(), nil
+	return out, rows.Err()
+}
+
+func unixOrZero(ts int64) time.Time {
+	if ts == 0 {
+		return time.Time{}
+	}
+	return time.Unix(ts, 0).UTC()
 }
