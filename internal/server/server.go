@@ -5,8 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
+	"supplydemand/internal/openinsider"
 	"supplydemand/internal/score"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
@@ -70,11 +77,12 @@ type zonesDTO struct {
 }
 
 type fundamentalsDTO struct {
-	PERatio          *float64 `json:"peRatio"`
-	ForwardPERatio   *float64 `json:"forwardPERatio"`
-	PEGRatio         *float64 `json:"pegRatio"`
-	RevenueGrowthPct *float64 `json:"revenueGrowthPct"`
-	NetMarginPct     *float64 `json:"netMarginPct"`
+	PERatio            *float64 `json:"peRatio"`
+	ForwardPERatio     *float64 `json:"forwardPERatio"`
+	PEGRatio           *float64 `json:"pegRatio"`
+	RevenueGrowthPct   *float64 `json:"revenueGrowthPct"`
+	NetMarginPct       *float64 `json:"netMarginPct"`
+	OperatingMarginPct *float64 `json:"operatingMarginPct"`
 }
 
 type dataResponse struct {
@@ -91,6 +99,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/company", s.handleCompany)
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/screener", s.handleScreener)
+	mux.HandleFunc("/api/insider", s.handleInsider)
 	mux.Handle("/", http.FileServer(http.Dir(s.config.WebDir)))
 	return mux
 }
@@ -227,11 +236,12 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		Symbol: symbol,
 		Bars:   barDTOs,
 		Fundamentals: fundamentalsDTO{
-			PERatio:          fundamentals.PERatio,
-			ForwardPERatio:   fundamentals.ForwardPERatio,
-			PEGRatio:         fundamentals.PEGRatio,
-			RevenueGrowthPct: fundamentals.RevenueGrowthPct,
-			NetMarginPct:     fundamentals.NetMarginPct,
+			PERatio:            fundamentals.PERatio,
+			ForwardPERatio:     fundamentals.ForwardPERatio,
+			PEGRatio:           fundamentals.PEGRatio,
+			RevenueGrowthPct:   fundamentals.RevenueGrowthPct,
+			NetMarginPct:       fundamentals.NetMarginPct,
+			OperatingMarginPct: fundamentals.OperatingMarginPct,
 		},
 		Zones: zonesDTO{
 			Max:             result.Max,
@@ -316,18 +326,19 @@ type screenerRowDTO struct {
 	Price              float64  `json:"price"`
 	ChangePct          float64  `json:"changePct"`
 	Zone               string   `json:"zone"` // "supply", "demand", or "none"
-	SupplyReached      bool     `json:"supplyReached"`
-	SupplyTop          float64  `json:"supplyTop"`
-	SupplyBtm          float64  `json:"supplyBtm"`
-	DemandReached      bool     `json:"demandReached"`
-	DemandTop          float64  `json:"demandTop"`
-	DemandBtm          float64  `json:"demandBtm"`
+	PEGRatio           *float64 `json:"pegRatio"`
+	ROICPct            *float64 `json:"roicPct"`
+	PSRatio            *float64 `json:"psRatio"`
+	PERatio            *float64 `json:"peRatio"`
+	RevenueGrowthPct   *float64 `json:"revenueGrowthPct"`
+	NetMarginPct       *float64 `json:"netMarginPct"`
 	Score              float64  `json:"score"`
 	Qualified          bool     `json:"qualified"`
 	RecommendationMean *float64 `json:"recommendationMean"`
 	RecommendationKey  string   `json:"recommendationKey"`
 	TargetMean         *float64 `json:"targetMean"`
 	UpsidePct          *float64 `json:"upsidePct"`
+	Flags              []string `json:"flags"`
 }
 
 // handleScreener returns every tracked symbol's latest price and current
@@ -380,34 +391,58 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		var freeCashflow, netDebtToMarketCapPct, earningsGrowthPct *float64
+		if ok {
+			freeCashflow = companyData.CashFlow.FreeCashflow
+
+			if marketCap := companyData.OwnMarketCap(info.Symbol); marketCap != nil && *marketCap > 0 &&
+				companyData.BalanceSheet.TotalDebt != nil && companyData.BalanceSheet.TotalCash != nil {
+				pct := (*companyData.BalanceSheet.TotalDebt - *companyData.BalanceSheet.TotalCash) / *marketCap * 100
+				netDebtToMarketCapPct = &pct
+			}
+
+			if len(companyData.Financials) >= 2 {
+				latest, prior := companyData.Financials[0], companyData.Financials[1]
+				if latest.NetIncome != nil && prior.NetIncome != nil && *prior.NetIncome != 0 {
+					pct := (*latest.NetIncome - *prior.NetIncome) / math.Abs(*prior.NetIncome) * 100
+					earningsGrowthPct = &pct
+				}
+			}
+		}
+
 		scoreResult := score.Compute(score.Input{
-			Zone:               zone,
-			Price:              last.Close,
-			RecommendationMean: recommendationMean,
-			TargetMean:         targetMean,
-			PERatio:            fundamentals.PERatio,
-			PEGRatio:           fundamentals.PEGRatio,
-			RevenueGrowthPct:   fundamentals.RevenueGrowthPct,
-			NetMarginPct:       fundamentals.NetMarginPct,
+			Zone:                  zone,
+			Price:                 last.Close,
+			RecommendationMean:    recommendationMean,
+			TargetMean:            targetMean,
+			PERatio:               fundamentals.PERatio,
+			PEGRatio:              fundamentals.PEGRatio,
+			RevenueGrowthPct:      fundamentals.RevenueGrowthPct,
+			NetMarginPct:          fundamentals.NetMarginPct,
+			OperatingMarginPct:    fundamentals.OperatingMarginPct,
+			FreeCashflow:          freeCashflow,
+			NetDebtToMarketCapPct: netDebtToMarketCapPct,
+			EarningsGrowthPct:     earningsGrowthPct,
 		})
 
 		row := screenerRowDTO{
 			Symbol:             info.Symbol,
 			Name:               info.Name,
 			Price:              last.Close,
-			SupplyReached:      result.SupplyReached,
-			SupplyTop:          result.SupplyTop,
-			SupplyBtm:          result.SupplyBtm,
-			DemandReached:      result.DemandReached,
-			DemandTop:          result.DemandTop,
-			DemandBtm:          result.DemandBtm,
 			Zone:               zone,
+			PEGRatio:           fundamentals.PEGRatio,
+			ROICPct:            fundamentals.ROICPct,
+			PSRatio:            fundamentals.PSRatio,
+			PERatio:            fundamentals.PERatio,
+			RevenueGrowthPct:   fundamentals.RevenueGrowthPct,
+			NetMarginPct:       fundamentals.NetMarginPct,
 			Score:              scoreResult.Total,
 			Qualified:          scoreResult.Qualified,
 			RecommendationMean: recommendationMean,
 			RecommendationKey:  recommendationKey,
 			TargetMean:         targetMean,
 			UpsidePct:          scoreResult.UpsidePct,
+			Flags:              scoreResult.Flags,
 		}
 		if len(bars) > 1 {
 			prev := bars[len(bars)-2]
@@ -422,5 +457,91 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{"rows": rows}); err != nil {
 		log.Printf("encoding /api/screener response: %v", err)
+	}
+}
+
+var tickerRe = regexp.MustCompile(`^[A-Z0-9.\-]{1,12}$`)
+
+func (s *Server) handleInsider(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if !tickerRe.MatchString(symbol) {
+		http.Error(w, fmt.Sprintf("invalid symbol %q", symbol), http.StatusBadRequest)
+		return
+	}
+	days := 365
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= 3650 {
+		days = d
+	}
+
+	var prices []pricePointDTO
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		prices = s.insiderPrices(symbol, days)
+	}()
+	trades, err := openinsider.FetchTrades(symbol, days)
+	wg.Wait()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	name, err := s.store.SymbolName(symbol)
+	if err != nil {
+		log.Printf("looking up name for %s: %v", symbol, err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"symbol": symbol,
+		"name":   name,
+		"days":   days,
+		"trades": trades,
+		"prices": prices,
+	}); err != nil {
+		log.Printf("encoding /api/insider response: %v", err)
+	}
+}
+
+type pricePointDTO struct {
+	Date  string  `json:"date"`
+	Close float64 `json:"close"`
+}
+
+func (s *Server) insiderPrices(symbol string, days int) []pricePointDTO {
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+
+	bars, err := s.store.LatestBars(symbol, days)
+	if err != nil {
+		log.Printf("loading stored bars for %s: %v", symbol, err)
+	}
+	if len(bars) == 0 || bars[0].Time.After(cutoff) || time.Since(bars[len(bars)-1].Time) > 7*24*time.Hour {
+		if bars, err = yahoo.FetchDaily(symbol, yahooRange(days)); err != nil {
+			log.Printf("fetching prices for %s insider view: %v", symbol, err)
+			return []pricePointDTO{}
+		}
+	}
+
+	prices := []pricePointDTO{}
+	for _, b := range bars {
+		if b.Time.Before(cutoff) || b.Close == 0 {
+			continue
+		}
+		prices = append(prices, pricePointDTO{Date: b.Time.Format("2006-01-02"), Close: b.Close})
+	}
+	return prices
+}
+
+func yahooRange(days int) string {
+	switch {
+	case days <= 365:
+		return "1y"
+	case days <= 730:
+		return "2y"
+	case days <= 1825:
+		return "5y"
+	default:
+		return "10y"
 	}
 }

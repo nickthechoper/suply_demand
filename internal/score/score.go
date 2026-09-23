@@ -1,14 +1,18 @@
 package score
 
 type Input struct {
-	Zone               string
-	Price              float64
-	RecommendationMean *float64
-	TargetMean         *float64
-	PERatio            *float64
-	PEGRatio           *float64
-	RevenueGrowthPct   *float64
-	NetMarginPct       *float64
+	Zone                  string
+	Price                 float64
+	RecommendationMean    *float64
+	TargetMean            *float64
+	PERatio               *float64
+	PEGRatio              *float64
+	RevenueGrowthPct      *float64
+	NetMarginPct          *float64
+	OperatingMarginPct    *float64
+	FreeCashflow          *float64
+	NetDebtToMarketCapPct *float64
+	EarningsGrowthPct     *float64
 }
 
 type Result struct {
@@ -18,11 +22,13 @@ type Result struct {
 	AnalystScore      float64
 	FundamentalsScore float64
 	UpsidePct         *float64
+	Flags             []string
 }
 
 func Compute(in Input) Result {
 	if in.Price <= 0 || in.RecommendationMean == nil || in.TargetMean == nil ||
-		in.PERatio == nil || in.PEGRatio == nil || in.RevenueGrowthPct == nil || in.NetMarginPct == nil {
+		in.PERatio == nil || in.PEGRatio == nil || in.RevenueGrowthPct == nil || in.NetMarginPct == nil ||
+		in.OperatingMarginPct == nil {
 		return Result{}
 	}
 
@@ -53,8 +59,27 @@ func Compute(in Input) Result {
 
 	growthScore := clamp((*in.RevenueGrowthPct+20)/60*100, 0, 100)
 	marginScore := clamp((*in.NetMarginPct+10)/40*100, 0, 100)
+	operatingMarginScore := clamp((*in.OperatingMarginPct+10)/40*100, 0, 100)
 
-	fundamentalsScore := (peScore + pegScore + growthScore + marginScore) / 4
+	fundamentalsScore := (peScore + pegScore + growthScore + marginScore + operatingMarginScore) / 5
+
+	var flags []string
+	riskPenalty := 0.0
+
+	if in.FreeCashflow != nil && *in.FreeCashflow < 0 {
+		flags = append(flags, "Negative free cash flow")
+		riskPenalty += 15
+	}
+	if in.NetDebtToMarketCapPct != nil && *in.NetDebtToMarketCapPct > 50 {
+		flags = append(flags, "Heavy net debt load")
+		riskPenalty += 15
+	}
+	if in.EarningsGrowthPct != nil && *in.EarningsGrowthPct < *in.RevenueGrowthPct-20 {
+		flags = append(flags, "Earnings growth lagging revenue")
+		riskPenalty += 15
+	}
+
+	fundamentalsScore = clamp(fundamentalsScore-riskPenalty, 0, 100)
 
 	return Result{
 		Qualified:         true,
@@ -63,6 +88,7 @@ func Compute(in Input) Result {
 		AnalystScore:      analystScore,
 		FundamentalsScore: fundamentalsScore,
 		UpsidePct:         &upsidePct,
+		Flags:             flags,
 	}
 }
 

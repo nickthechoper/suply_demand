@@ -13,7 +13,46 @@ import (
 	"supplydemand/internal/yahoo"
 )
 
-const staleAfter = 20 * time.Hour
+const (
+	staleAfter     = 20 * time.Hour
+	retryBaseDelay = 5 * time.Minute
+	retryMaxDelay  = 6 * time.Hour
+)
+
+type outcome int
+
+const (
+	skipped outcome = iota
+	fetched
+	failed
+)
+
+type backoff struct {
+	failures int
+	retryAt  time.Time
+}
+
+type retries map[string]backoff
+
+func (r retries) ready(key string, now time.Time) bool {
+	return !now.Before(r[key].retryAt)
+}
+
+func (r retries) succeed(key string) {
+	delete(r, key)
+}
+
+func (r retries) fail(key string, now time.Time) (int, time.Duration) {
+	b := r[key]
+	b.failures++
+	delay := retryMaxDelay
+	if b.failures <= 8 {
+		delay = min(retryBaseDelay<<(b.failures-1), retryMaxDelay)
+	}
+	b.retryAt = now.Add(delay)
+	r[key] = b
+	return b.failures, delay
+}
 
 type Config struct {
 	Store      *store.Store
@@ -68,6 +107,8 @@ func nameFromStoredCompanyData(st *store.Store, symbol string) (string, error) {
 // Run loops, cycling through symbols and refreshing whatever's stale, until
 // ctx is cancelled. Call it in its own goroutine.
 func Run(ctx context.Context, symbols []string, cfg Config) {
+	pending := retries{}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -82,24 +123,42 @@ func Run(ctx context.Context, symbols []string, cfg Config) {
 			continue
 		}
 
+		var fetches, failures, deferred int
 		for _, symbol := range symbols {
-			refreshBars(cfg, symbol)
-			if !sleep(ctx, cfg.Pacing) {
-				return
+			steps := []struct {
+				name string
+				run  func() outcome
+			}{
+				{"bars", func() outcome { return refreshBars(cfg, symbol) }},
+				{"fundamentals", func() outcome { return refreshFundamentals(cfg, client, crumb, symbol) }},
+				{"company data", func() outcome { return refreshCompanyData(cfg, client, crumb, symbol) }},
+				{"name", func() outcome { return refreshSymbolName(cfg, client, crumb, symbol) }},
 			}
-			refreshFundamentals(cfg, client, crumb, symbol)
-			if !sleep(ctx, cfg.Pacing) {
-				return
-			}
-			refreshCompanyData(cfg, client, crumb, symbol)
-			if !sleep(ctx, cfg.Pacing) {
-				return
-			}
-			refreshSymbolName(cfg, client, crumb, symbol)
-			if !sleep(ctx, cfg.Pacing) {
-				return
+			for _, step := range steps {
+				key := symbol + "/" + step.name
+				if !pending.ready(key, time.Now()) {
+					deferred++
+					continue
+				}
+
+				switch step.run() {
+				case skipped:
+					continue
+				case fetched:
+					fetches++
+					pending.succeed(key)
+				case failed:
+					failures++
+					attempts, delay := pending.fail(key, time.Now())
+					log.Printf("worker: %s for %s failed (attempt %d), retrying in %s", step.name, symbol, attempts, delay)
+				}
+
+				if !sleep(ctx, cfg.Pacing) {
+					return
+				}
 			}
 		}
+		log.Printf("worker: cycle done across %d symbols: %d fetched, %d failed, %d waiting to retry", len(symbols), fetches, failures, deferred)
 
 		if !sleep(ctx, time.Minute) {
 			return
@@ -119,68 +178,70 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func refreshBars(cfg Config, symbol string) {
+func refreshBars(cfg Config, symbol string) outcome {
 	latest, err := cfg.Store.LatestTimestamp(symbol)
 	if err != nil {
 		log.Printf("worker: checking latest bar for %s: %v", symbol, err)
-		return
+		return skipped
 	}
 	if time.Since(latest) <= staleAfter {
-		return
+		return skipped
 	}
 
 	bars, err := yahoo.FetchDaily(symbol, cfg.FetchRange)
 	if err != nil {
 		log.Printf("worker: warning: could not fetch bars for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	if err := cfg.Store.UpsertBars(symbol, bars); err != nil {
 		log.Printf("worker: warning: could not store bars for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	log.Printf("worker: stored %d bars for %s", len(bars), symbol)
+	return fetched
 }
 
-func refreshFundamentals(cfg Config, client *http.Client, crumb, symbol string) {
+func refreshFundamentals(cfg Config, client *http.Client, crumb, symbol string) outcome {
 	_, fetchedAt, ok, err := cfg.Store.Fundamentals(symbol)
 	if err != nil {
 		log.Printf("worker: checking stored fundamentals for %s: %v", symbol, err)
-		return
+		return skipped
 	}
 	if ok && time.Since(fetchedAt) <= staleAfter {
-		return
+		return skipped
 	}
 
 	fundamentals, err := yahoo.FetchFundamentalsWithClient(client, crumb, symbol)
 	if err != nil {
 		log.Printf("worker: warning: could not fetch fundamentals for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	if err := cfg.Store.SetFundamentals(symbol, fundamentals); err != nil {
 		log.Printf("worker: warning: could not store fundamentals for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	log.Printf("worker: stored fundamentals for %s", symbol)
+	return fetched
 }
 
-func refreshCompanyData(cfg Config, client *http.Client, crumb, symbol string) {
+func refreshCompanyData(cfg Config, client *http.Client, crumb, symbol string) outcome {
 	_, fetchedAt, ok, err := cfg.Store.CompanyData(symbol)
 	if err != nil {
 		log.Printf("worker: checking stored company data for %s: %v", symbol, err)
-		return
+		return skipped
 	}
 	if ok && time.Since(fetchedAt) <= staleAfter {
-		return
+		return skipped
 	}
 
 	companyData, err := yahoo.FetchCompanyDataWithClient(client, crumb, symbol, cfg.Peers[symbol])
 	if err != nil {
 		log.Printf("worker: warning: could not fetch company data for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	if err := cfg.Store.SetCompanyData(symbol, companyData); err != nil {
 		log.Printf("worker: warning: could not store company data for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	if name := companyData.OwnName(symbol); name != "" {
 		if err := cfg.Store.SetSymbolName(symbol, name); err != nil {
@@ -188,21 +249,17 @@ func refreshCompanyData(cfg Config, client *http.Client, crumb, symbol string) {
 		}
 	}
 	log.Printf("worker: stored company data for %s", symbol)
+	return fetched
 }
 
-// refreshSymbolName backfills a symbol's company name when it's still
-// unknown, independent of whether the heavier company data fetch above ran
-// this cycle (e.g. because it was already fresh). It first checks whether
-// the name can be pulled out of company data already stored for the symbol,
-// falling back to a lightweight quote lookup only if that data isn't there.
-func refreshSymbolName(cfg Config, client *http.Client, crumb, symbol string) {
+func refreshSymbolName(cfg Config, client *http.Client, crumb, symbol string) outcome {
 	name, err := cfg.Store.SymbolName(symbol)
 	if err != nil {
 		log.Printf("worker: checking stored name for %s: %v", symbol, err)
-		return
+		return skipped
 	}
 	if name != "" {
-		return
+		return skipped
 	}
 
 	if storedName, err := nameFromStoredCompanyData(cfg.Store, symbol); err != nil {
@@ -210,20 +267,21 @@ func refreshSymbolName(cfg Config, client *http.Client, crumb, symbol string) {
 	} else if storedName != "" {
 		if err := cfg.Store.SetSymbolName(symbol, storedName); err != nil {
 			log.Printf("worker: warning: could not store name for %s: %v", symbol, err)
-			return
+			return skipped
 		}
 		log.Printf("worker: stored name %q for %s (from cached company data)", storedName, symbol)
-		return
+		return skipped
 	}
 
 	quotes, err := yahoo.FetchPeerQuotes(client, crumb, symbol, nil)
 	if err != nil || len(quotes) == 0 {
 		log.Printf("worker: warning: could not fetch name for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	if err := cfg.Store.SetSymbolName(symbol, quotes[0].Name); err != nil {
 		log.Printf("worker: warning: could not store name for %s: %v", symbol, err)
-		return
+		return failed
 	}
 	log.Printf("worker: stored name %q for %s", quotes[0].Name, symbol)
+	return fetched
 }

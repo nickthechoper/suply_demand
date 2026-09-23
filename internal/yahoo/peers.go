@@ -9,11 +9,16 @@ import (
 )
 
 type PeerQuote struct {
-	Symbol     string   `json:"symbol"`
-	Name       string   `json:"name"`
-	TrailingPE *float64 `json:"trailingPE"`
-	ForwardPE  *float64 `json:"forwardPE"`
-	MarketCap  *float64 `json:"marketCap"`
+	Symbol           string   `json:"symbol"`
+	Name             string   `json:"name"`
+	TrailingPE       *float64 `json:"trailingPE"`
+	ForwardPE        *float64 `json:"forwardPE"`
+	MarketCap        *float64 `json:"marketCap"`
+	PegRatio         *float64 `json:"pegRatio"`
+	PsRatio          *float64 `json:"psRatio"`
+	RevenueGrowthPct *float64 `json:"revenueGrowthPct"`
+	NetMarginPct     *float64 `json:"netMarginPct"`
+	ROICPct          *float64 `json:"roicPct"`
 }
 
 type quoteBatchResponse struct {
@@ -66,4 +71,22 @@ func FetchPeerQuotes(client *http.Client, crumb string, symbol string, peerSymbo
 		})
 	}
 	return quotes, nil
+}
+
+// enrichPeerFundamentals fills in PEG, P/S, revenue growth, net margin, and
+// ROIC for each quote via a per-symbol fundamentals fetch — the same metrics
+// shown in the ticker screener. A failed fetch for one peer just leaves its
+// fields nil rather than failing the whole peer comparison.
+func enrichPeerFundamentals(client *http.Client, crumb string, quotes []PeerQuote) {
+	for i := range quotes {
+		f, err := FetchFundamentalsWithClient(client, crumb, quotes[i].Symbol)
+		if err != nil {
+			continue
+		}
+		quotes[i].PegRatio = f.PEGRatio
+		quotes[i].PsRatio = f.PSRatio
+		quotes[i].RevenueGrowthPct = f.RevenueGrowthPct
+		quotes[i].NetMarginPct = f.NetMarginPct
+		quotes[i].ROICPct = f.ROICPct
+	}
 }

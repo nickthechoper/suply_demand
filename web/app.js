@@ -412,6 +412,7 @@ function updateFundamentals(f) {
   const pegEl = document.getElementById('fund-peg');
   const revEl = document.getElementById('fund-rev-growth');
   const marginEl = document.getElementById('fund-net-margin');
+  const operatingMarginEl = document.getElementById('fund-operating-margin');
 
   if (f && f.peRatio != null) {
     peEl.textContent = f.peRatio.toFixed(2);
@@ -436,6 +437,14 @@ function updateFundamentals(f) {
   } else {
     marginEl.textContent = 'n/a';
     marginEl.style.color = '';
+  }
+
+  if (f && f.operatingMarginPct != null) {
+    operatingMarginEl.textContent = `${f.operatingMarginPct.toFixed(2)}%`;
+    operatingMarginEl.style.color = f.operatingMarginPct >= 0 ? '#26a69a' : '#ef5350';
+  } else {
+    operatingMarginEl.textContent = 'n/a';
+    operatingMarginEl.style.color = '';
   }
 }
 
@@ -631,15 +640,21 @@ function renderPeers(peers, symbol) {
     el.innerHTML = '<span class="empty-note">No peer data available.</span>';
     return;
   }
+  const pctCell = n => n != null ? `<span style="color:${n >= 0 ? '#26a69a' : '#ef5350'}">${n.toFixed(2)}%</span>` : 'n/a';
   const rows = peers.map(p => `
     <tr class="${p.symbol === symbol ? 'highlight-row' : ''}">
       <td>${p.symbol}${p.symbol === symbol ? ' (this)' : ''}</td>
       <td>${p.trailingPE != null ? fmt(p.trailingPE) : 'n/a'}</td>
       <td>${p.forwardPE != null ? fmt(p.forwardPE) : 'n/a'}</td>
+      <td>${p.pegRatio != null ? fmt(p.pegRatio) : 'n/a'}</td>
+      <td>${p.psRatio != null ? fmt(p.psRatio) : 'n/a'}</td>
+      <td>${pctCell(p.roicPct)}</td>
+      <td>${pctCell(p.revenueGrowthPct)}</td>
+      <td>${pctCell(p.netMarginPct)}</td>
       <td>${fmtMoney(p.marketCap)}</td>
     </tr>
   `).join('');
-  el.innerHTML = `<table><tr><th>Symbol</th><th>P/E</th><th>Fwd P/E</th><th>Mkt Cap</th></tr>${rows}</table>`;
+  el.innerHTML = `<table><tr><th>Symbol</th><th>P/E</th><th>Fwd P/E</th><th>PEG</th><th>P/S</th><th>ROIC TTM</th><th>Revenue Growth (YoY)</th><th>Net Margin</th><th>Mkt Cap</th></tr>${rows}</table>`;
 }
 
 function renderProfile(profile) {
@@ -776,6 +791,9 @@ function renderFilings(filings) {
 }
 
 async function loadCompanyData() {
+  const insiderHref = `insider.html?symbol=${encodeURIComponent(currentSymbol)}`;
+  document.getElementById('insider-link').href = insiderHref;
+  document.getElementById('insider-all-link').href = insiderHref;
   try {
     const resp = await fetch(`/api/company?symbol=${encodeURIComponent(currentSymbol)}`);
     if (!resp.ok) {
