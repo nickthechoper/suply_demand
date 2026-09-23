@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -44,7 +45,19 @@ func main() {
 	webDir := flag.String("webdir", "web", "directory containing the dashboard's static frontend")
 	fetchRange := flag.String("fetch-range", "5y", "Yahoo Finance history range to fetch")
 	fetchPacing := flag.Duration("fetch-pacing", time.Second, "delay between individual Yahoo Finance requests made by the background worker")
+	logPath := flag.String("log-file", "data/dashboard.log", "file that receives all log output, including routine fetch activity kept off the terminal")
 	flag.Parse()
+
+	if err := os.MkdirAll(filepath.Dir(*logPath), 0o755); err != nil {
+		log.Fatalf("creating log directory: %v", err)
+	}
+	logFile, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatalf("opening log file: %v", err)
+	}
+	defer logFile.Close()
+	log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	worker.SetActivityLog(logFile)
 
 	st, err := store.Open(*dbPath)
 	if err != nil {

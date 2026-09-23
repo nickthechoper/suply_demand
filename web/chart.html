@@ -24,6 +24,7 @@
     --space-7: 36px;
   }
   * { box-sizing: border-box; }
+  html { scrollbar-gutter: stable; }
   body {
     margin: 0;
     font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -32,13 +33,15 @@
   }
   header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--space-3);
-    padding: var(--space-4) var(--space-6);
+    height: 68px;
+    padding: 0 var(--space-6);
     border-bottom: 1px solid var(--border);
   }
   header h1 { font-size: 18px; margin: 0; }
-  header .symbol { color: var(--muted); font-size: 14px; }
+  header .symbol { color: var(--muted); font-size: 14px; text-decoration: none; }
+  header .symbol:hover { text-decoration: underline; }
   #symbol-switcher {
     margin-left: auto;
     display: flex;
@@ -61,7 +64,10 @@
     padding: 1px 5px;
   }
   header .hint { color: var(--muted); font-size: 12px; }
+  header .page-nav { display: flex; gap: var(--space-3); flex-shrink: 0; }
   header .nav-link {
+    line-height: 18px;
+    white-space: nowrap;
     color: var(--text);
     text-decoration: none;
     font-size: 13px;
@@ -70,6 +76,7 @@
     border-radius: 8px;
   }
   header .nav-link:hover { border-color: var(--supply); }
+  header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; cursor: default; user-select: none; }
 
   .hidden { display: none !important; }
   .palette-overlay {
@@ -119,14 +126,22 @@
   .palette-item.active, .palette-item:hover { background: rgba(33, 87, 243, 0.18); }
   .palette-empty { padding: var(--space-4) var(--space-5); color: var(--muted); font-size: 13px; }
   #refresh {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: var(--space-2) var(--space-4);
     border-radius: 8px;
     cursor: pointer;
   }
   #refresh:hover { border-color: var(--supply); }
+  #refresh:disabled { cursor: wait; }
+  #refresh.spinning svg { animation: refresh-spin 0.8s linear infinite; }
+  @keyframes refresh-spin { to { transform: rotate(360deg); } }
   #range-bar {
     display: flex;
     align-items: center;
@@ -291,15 +306,20 @@
 <body>
   <header>
     <h1>Supply &amp; Demand Dashboard</h1>
-    <span class="symbol" id="symbol-label">loading…</span>
+    <a class="symbol" id="symbol-label" target="_blank" rel="noopener">loading…</a>
     <button id="symbol-switcher" title="Switch ticker">
       <span id="symbol-switcher-text">Select ticker</span>
       <span class="kbd">Ctrl K</span>
     </button>
     <span class="hint" title="Shift + scroll over the chart to jump to the next/previous tracked ticker">Shift+Scroll: next ticker</span>
-    <a class="nav-link" href="list.html">List view</a>
-    <a class="nav-link" id="insider-link" href="insider.html">Insider trades</a>
-    <button id="refresh">Refresh data</button>
+    <button id="refresh" title="Refresh data" aria-label="Refresh data">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </button>
+    <nav class="page-nav">
+      <a class="nav-link" id="list-link" href="list.html">List view</a>
+      <a class="nav-link" aria-current="page">Chart view</a>
+      <a class="nav-link" id="insider-link" href="insider.html">Insider trades</a>
+    </nav>
   </header>
 
   <div id="palette-overlay" class="palette-overlay hidden">

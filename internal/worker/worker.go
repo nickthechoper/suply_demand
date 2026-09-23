@@ -5,19 +5,27 @@ package worker
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
+	"supplydemand/internal/openinsider"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
 )
 
 const (
-	staleAfter     = 20 * time.Hour
 	retryBaseDelay = 5 * time.Minute
 	retryMaxDelay  = 6 * time.Hour
 )
+
+var activity = log.New(io.Discard, "", log.LstdFlags)
+
+func SetActivityLog(w io.Writer) {
+	activity.SetOutput(w)
+}
 
 type outcome int
 
@@ -89,7 +97,7 @@ func BackfillNames(st *store.Store, symbols []string) {
 			log.Printf("worker: warning: could not store name for %s: %v", symbol, err)
 			continue
 		}
-		log.Printf("worker: stored name %q for %s (from cached company data)", storedName, symbol)
+		activity.Printf("worker: stored name %q for %s (from cached company data)", storedName, symbol)
 	}
 }
 
@@ -104,8 +112,15 @@ func nameFromStoredCompanyData(st *store.Store, symbol string) (string, error) {
 	return companyData.OwnName(symbol), nil
 }
 
-// Run loops, cycling through symbols and refreshing whatever's stale, until
-// ctx is cancelled. Call it in its own goroutine.
+type task struct {
+	symbol    string
+	name      string
+	updatedAt time.Time
+	run       func() outcome
+}
+
+// Run keeps refreshing tracked data until ctx is cancelled, always working on
+// whatever was updated longest ago first. Call it in its own goroutine.
 func Run(ctx context.Context, symbols []string, cfg Config) {
 	pending := retries{}
 
@@ -123,47 +138,79 @@ func Run(ctx context.Context, symbols []string, cfg Config) {
 			continue
 		}
 
-		var fetches, failures, deferred int
-		for _, symbol := range symbols {
-			steps := []struct {
-				name string
-				run  func() outcome
-			}{
-				{"bars", func() outcome { return refreshBars(cfg, symbol) }},
-				{"fundamentals", func() outcome { return refreshFundamentals(cfg, client, crumb, symbol) }},
-				{"company data", func() outcome { return refreshCompanyData(cfg, client, crumb, symbol) }},
-				{"name", func() outcome { return refreshSymbolName(cfg, client, crumb, symbol) }},
+		tasks, err := oldestFirst(cfg, client, crumb, symbols)
+		if err != nil {
+			log.Printf("worker: listing fetch times: %v", err)
+			if !sleep(ctx, time.Minute) {
+				return
 			}
-			for _, step := range steps {
-				key := symbol + "/" + step.name
-				if !pending.ready(key, time.Now()) {
-					deferred++
-					continue
-				}
+			continue
+		}
 
-				switch step.run() {
-				case skipped:
-					continue
-				case fetched:
-					fetches++
-					pending.succeed(key)
-				case failed:
-					failures++
-					attempts, delay := pending.fail(key, time.Now())
-					log.Printf("worker: %s for %s failed (attempt %d), retrying in %s", step.name, symbol, attempts, delay)
-				}
+		var fetches, failures, deferred int
+		for _, t := range tasks {
+			key := t.symbol + "/" + t.name
+			if !pending.ready(key, time.Now()) {
+				deferred++
+				continue
+			}
 
-				if !sleep(ctx, cfg.Pacing) {
-					return
-				}
+			switch t.run() {
+			case skipped:
+				continue
+			case fetched:
+				fetches++
+				pending.succeed(key)
+			case failed:
+				failures++
+				attempts, delay := pending.fail(key, time.Now())
+				log.Printf("worker: %s for %s failed (attempt %d), retrying in %s", t.name, t.symbol, attempts, delay)
+			}
+
+			if !sleep(ctx, cfg.Pacing) {
+				return
 			}
 		}
-		log.Printf("worker: cycle done across %d symbols: %d fetched, %d failed, %d waiting to retry", len(symbols), fetches, failures, deferred)
+		activity.Printf("worker: cycle done across %d symbols: %d fetched, %d failed, %d waiting to retry", len(symbols), fetches, failures, deferred)
 
 		if !sleep(ctx, time.Minute) {
 			return
 		}
 	}
+}
+
+func oldestFirst(cfg Config, client *http.Client, crumb string, symbols []string) ([]task, error) {
+	times, err := cfg.Store.ListFetchTimes()
+	if err != nil {
+		return nil, err
+	}
+
+	tracked := make(map[string]bool, len(symbols))
+	for _, symbol := range symbols {
+		tracked[symbol] = true
+	}
+
+	var tasks []task
+	for _, ft := range times {
+		if !tracked[ft.Symbol] {
+			continue
+		}
+		symbol := ft.Symbol
+		if ft.Name == "" {
+			tasks = append(tasks, task{symbol, "name", time.Time{}, func() outcome { return refreshSymbolName(cfg, client, crumb, symbol) }})
+		}
+		tasks = append(tasks,
+			task{symbol, "bars", ft.Bars, func() outcome { return refreshBars(cfg, symbol) }},
+			task{symbol, "fundamentals", ft.Fundamentals, func() outcome { return refreshFundamentals(cfg, client, crumb, symbol) }},
+			task{symbol, "company data", ft.CompanyData, func() outcome { return refreshCompanyData(cfg, client, crumb, symbol) }},
+			task{symbol, "insider trades", ft.Insider, func() outcome { return refreshInsiderTrades(cfg, symbol) }},
+		)
+	}
+
+	sort.SliceStable(tasks, func(i, j int) bool {
+		return tasks[i].updatedAt.Before(tasks[j].updatedAt)
+	})
+	return tasks, nil
 }
 
 // sleep waits for d or ctx cancellation, whichever comes first. It reports
@@ -178,17 +225,38 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+var incrementalRanges = []struct {
+	maxGap time.Duration
+	name   string
+}{
+	{4 * 24 * time.Hour, "5d"},
+	{25 * 24 * time.Hour, "1mo"},
+	{85 * 24 * time.Hour, "3mo"},
+	{175 * 24 * time.Hour, "6mo"},
+	{360 * 24 * time.Hour, "1y"},
+}
+
+func barsRange(cfg Config, symbol string) (string, error) {
+	latest, err := cfg.Store.LatestBars(symbol, 1)
+	if err != nil || len(latest) == 0 {
+		return cfg.FetchRange, err
+	}
+	gap := time.Since(latest[0].Time)
+	for _, r := range incrementalRanges {
+		if gap < r.maxGap {
+			return r.name, nil
+		}
+	}
+	return cfg.FetchRange, nil
+}
+
 func refreshBars(cfg Config, symbol string) outcome {
-	latest, err := cfg.Store.LatestTimestamp(symbol)
+	rangeStr, err := barsRange(cfg, symbol)
 	if err != nil {
 		log.Printf("worker: checking latest bar for %s: %v", symbol, err)
-		return skipped
-	}
-	if time.Since(latest) <= staleAfter {
-		return skipped
 	}
 
-	bars, err := yahoo.FetchDaily(symbol, cfg.FetchRange)
+	bars, err := yahoo.FetchDaily(symbol, rangeStr)
 	if err != nil {
 		log.Printf("worker: warning: could not fetch bars for %s: %v", symbol, err)
 		return failed
@@ -197,20 +265,11 @@ func refreshBars(cfg Config, symbol string) outcome {
 		log.Printf("worker: warning: could not store bars for %s: %v", symbol, err)
 		return failed
 	}
-	log.Printf("worker: stored %d bars for %s", len(bars), symbol)
+	activity.Printf("worker: stored %d bars for %s (range %s)", len(bars), symbol, rangeStr)
 	return fetched
 }
 
 func refreshFundamentals(cfg Config, client *http.Client, crumb, symbol string) outcome {
-	_, fetchedAt, ok, err := cfg.Store.Fundamentals(symbol)
-	if err != nil {
-		log.Printf("worker: checking stored fundamentals for %s: %v", symbol, err)
-		return skipped
-	}
-	if ok && time.Since(fetchedAt) <= staleAfter {
-		return skipped
-	}
-
 	fundamentals, err := yahoo.FetchFundamentalsWithClient(client, crumb, symbol)
 	if err != nil {
 		log.Printf("worker: warning: could not fetch fundamentals for %s: %v", symbol, err)
@@ -220,20 +279,11 @@ func refreshFundamentals(cfg Config, client *http.Client, crumb, symbol string) 
 		log.Printf("worker: warning: could not store fundamentals for %s: %v", symbol, err)
 		return failed
 	}
-	log.Printf("worker: stored fundamentals for %s", symbol)
+	activity.Printf("worker: stored fundamentals for %s", symbol)
 	return fetched
 }
 
 func refreshCompanyData(cfg Config, client *http.Client, crumb, symbol string) outcome {
-	_, fetchedAt, ok, err := cfg.Store.CompanyData(symbol)
-	if err != nil {
-		log.Printf("worker: checking stored company data for %s: %v", symbol, err)
-		return skipped
-	}
-	if ok && time.Since(fetchedAt) <= staleAfter {
-		return skipped
-	}
-
 	companyData, err := yahoo.FetchCompanyDataWithClient(client, crumb, symbol, cfg.Peers[symbol])
 	if err != nil {
 		log.Printf("worker: warning: could not fetch company data for %s: %v", symbol, err)
@@ -248,7 +298,21 @@ func refreshCompanyData(cfg Config, client *http.Client, crumb, symbol string) o
 			log.Printf("worker: warning: could not store company name for %s: %v", symbol, err)
 		}
 	}
-	log.Printf("worker: stored company data for %s", symbol)
+	activity.Printf("worker: stored company data for %s", symbol)
+	return fetched
+}
+
+func refreshInsiderTrades(cfg Config, symbol string) outcome {
+	trades, err := openinsider.Fetch(symbol, openinsider.WindowDays)
+	if err != nil {
+		log.Printf("worker: warning: could not fetch insider trades for %s: %v", symbol, err)
+		return failed
+	}
+	if err := cfg.Store.SetInsiderTrades(symbol, trades); err != nil {
+		log.Printf("worker: warning: could not store insider trades for %s: %v", symbol, err)
+		return failed
+	}
+	activity.Printf("worker: stored %d insider trades for %s", len(trades), symbol)
 	return fetched
 }
 
@@ -269,7 +333,7 @@ func refreshSymbolName(cfg Config, client *http.Client, crumb, symbol string) ou
 			log.Printf("worker: warning: could not store name for %s: %v", symbol, err)
 			return skipped
 		}
-		log.Printf("worker: stored name %q for %s (from cached company data)", storedName, symbol)
+		activity.Printf("worker: stored name %q for %s (from cached company data)", storedName, symbol)
 		return skipped
 	}
 
@@ -282,6 +346,6 @@ func refreshSymbolName(cfg Config, client *http.Client, crumb, symbol string) ou
 		log.Printf("worker: warning: could not store name for %s: %v", symbol, err)
 		return failed
 	}
-	log.Printf("worker: stored name %q for %s", quotes[0].Name, symbol)
+	activity.Printf("worker: stored name %q for %s", quotes[0].Name, symbol)
 	return fetched
 }

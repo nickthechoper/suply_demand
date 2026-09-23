@@ -16,6 +16,8 @@ const (
 	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	cacheTTL  = 10 * time.Minute
 	attempts  = 3
+
+	WindowDays = 730
 )
 
 type Trade struct {
@@ -64,6 +66,18 @@ func FetchTrades(symbol string, days int) ([]Trade, error) {
 	}
 	mu.Unlock()
 
+	trades, err := Fetch(symbol, days)
+	if err != nil {
+		return nil, err
+	}
+
+	mu.Lock()
+	cache[key] = cacheEntry{at: time.Now(), trades: trades}
+	mu.Unlock()
+	return trades, nil
+}
+
+func Fetch(symbol string, days int) ([]Trade, error) {
 	url := fmt.Sprintf("http://openinsider.com/screener?s=%s&fd=0&td=%d&cnt=5000&xp=1&xs=1&xa=1&xd=1&xg=1&xf=1&xm=1&xx=1&xc=1&xw=1", symbol, days)
 	var body []byte
 	var err error
@@ -76,11 +90,28 @@ func FetchTrades(symbol string, days int) ([]Trade, error) {
 		return nil, fmt.Errorf("fetching openinsider for %s: %w", symbol, err)
 	}
 
-	trades := parse(string(body))
-	mu.Lock()
-	cache[key] = cacheEntry{at: time.Now(), trades: trades}
-	mu.Unlock()
-	return trades, nil
+	return parse(string(body)), nil
+}
+
+func Within(trades []Trade, days int) []Trade {
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+	out := []Trade{}
+	for _, t := range trades {
+		if t.TradeDate >= cutoff {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func NetOpenMarket(trades []Trade) float64 {
+	var net float64
+	for _, t := range trades {
+		if (t.Code == "P" || t.Code == "S") && t.Value != nil {
+			net += *t.Value
+		}
+	}
+	return net
 }
 
 func get(url string) ([]byte, error) {

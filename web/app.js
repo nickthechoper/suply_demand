@@ -468,7 +468,9 @@ async function loadData() {
     return;
   }
   const data = await resp.json();
-  document.getElementById('symbol-label').textContent = data.symbol;
+  const symbolLabel = document.getElementById('symbol-label');
+  symbolLabel.textContent = data.symbol;
+  symbolLabel.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(data.symbol)}`;
   document.getElementById('symbol-switcher-text').textContent = data.symbol;
   currentSymbol = data.symbol;
 
@@ -794,6 +796,7 @@ async function loadCompanyData() {
   const insiderHref = `insider.html?symbol=${encodeURIComponent(currentSymbol)}`;
   document.getElementById('insider-link').href = insiderHref;
   document.getElementById('insider-all-link').href = insiderHref;
+  document.getElementById('list-link').href = `list.html?symbol=${encodeURIComponent(currentSymbol)}`;
   try {
     const resp = await fetch(`/api/company?symbol=${encodeURIComponent(currentSymbol)}`);
     if (!resp.ok) {
@@ -816,15 +819,23 @@ async function loadCompanyData() {
   }
 }
 
-document.getElementById('refresh').addEventListener('click', async () => {
-  statusEl.textContent = 'Refreshing from Yahoo Finance…';
-  const resp = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}`, { method: 'POST' });
-  if (!resp.ok) {
-    statusEl.textContent = `Refresh failed: ${await resp.text()}`;
-    return;
+document.getElementById('refresh').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.classList.add('spinning');
+  statusEl.textContent = 'Refreshing from Yahoo Finance and OpenInsider…';
+  try {
+    const resp = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}`, { method: 'POST' });
+    if (!resp.ok) {
+      statusEl.textContent = `Refresh failed: ${await resp.text()}`;
+      return;
+    }
+    await loadData();
+    await loadCompanyData();
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('spinning');
   }
-  await loadData();
-  await loadCompanyData();
 });
 
 let trackedSymbols = [];

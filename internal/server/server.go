@@ -100,7 +100,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/screener", s.handleScreener)
 	mux.HandleFunc("/api/insider", s.handleInsider)
-	mux.Handle("/", http.FileServer(http.Dir(s.config.WebDir)))
+	mux.HandleFunc("/api/note", s.handleNote)
+	files := http.FileServer(http.Dir(s.config.WebDir))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			http.Redirect(w, r, "/list.html", http.StatusFound)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
 	return mux
 }
 
@@ -268,8 +276,9 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRefresh re-fetches the full daily history and fundamentals for the
-// requested symbol from Yahoo Finance and upserts them into the store.
+// handleRefresh re-fetches the full daily history, fundamentals and company
+// data from Yahoo Finance and insider trades from OpenInsider for the
+// requested symbol, and upserts them into the store.
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	symbol, ok := s.symbolFor(r)
 	if !ok {
@@ -311,34 +320,48 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	insiderTradesFetched := true
+	trades, err := openinsider.Fetch(symbol, openinsider.WindowDays)
+	if err != nil {
+		log.Printf("warning: could not refresh insider trades: %v", err)
+		insiderTradesFetched = false
+	} else if err := s.store.SetInsiderTrades(symbol, trades); err != nil {
+		log.Printf("warning: could not store refreshed insider trades: %v", err)
+		insiderTradesFetched = false
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"symbol":              symbol,
-		"barsFetched":         len(bars),
-		"fundamentalsFetched": fundamentalsFetched,
-		"companyDataFetched":  companyDataFetched,
+		"symbol":               symbol,
+		"barsFetched":          len(bars),
+		"fundamentalsFetched":  fundamentalsFetched,
+		"companyDataFetched":   companyDataFetched,
+		"insiderTradesFetched": insiderTradesFetched,
 	})
 }
 
 type screenerRowDTO struct {
-	Symbol             string   `json:"symbol"`
-	Name               string   `json:"name"`
-	Price              float64  `json:"price"`
-	ChangePct          float64  `json:"changePct"`
-	Zone               string   `json:"zone"` // "supply", "demand", or "none"
-	PEGRatio           *float64 `json:"pegRatio"`
-	ROICPct            *float64 `json:"roicPct"`
-	PSRatio            *float64 `json:"psRatio"`
-	PERatio            *float64 `json:"peRatio"`
-	RevenueGrowthPct   *float64 `json:"revenueGrowthPct"`
-	NetMarginPct       *float64 `json:"netMarginPct"`
-	Score              float64  `json:"score"`
-	Qualified          bool     `json:"qualified"`
-	RecommendationMean *float64 `json:"recommendationMean"`
-	RecommendationKey  string   `json:"recommendationKey"`
-	TargetMean         *float64 `json:"targetMean"`
-	UpsidePct          *float64 `json:"upsidePct"`
-	Flags              []string `json:"flags"`
+	Symbol             string            `json:"symbol"`
+	Name               string            `json:"name"`
+	Price              float64           `json:"price"`
+	ChangePct          float64           `json:"changePct"`
+	Zone               string            `json:"zone"` // "supply", "demand", or "none"
+	PEGRatio           *float64          `json:"pegRatio"`
+	ROICPct            *float64          `json:"roicPct"`
+	PSRatio            *float64          `json:"psRatio"`
+	PERatio            *float64          `json:"peRatio"`
+	RevenueGrowthPct   *float64          `json:"revenueGrowthPct"`
+	NetMarginPct       *float64          `json:"netMarginPct"`
+	Score              float64           `json:"score"`
+	Qualified          bool              `json:"qualified"`
+	ScoreBreakdown     []score.Component `json:"scoreBreakdown"`
+	RecommendationMean *float64          `json:"recommendationMean"`
+	RecommendationKey  string            `json:"recommendationKey"`
+	TargetMean         *float64          `json:"targetMean"`
+	UpsidePct          *float64          `json:"upsidePct"`
+	Flags              []string          `json:"flags"`
+	NetOpenMarket      *float64          `json:"netOpenMarket"`
+	Note               string            `json:"note"`
 }
 
 // handleScreener returns every tracked symbol's latest price and current
@@ -391,11 +414,20 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var freeCashflow, netDebtToMarketCapPct, earningsGrowthPct *float64
-		if ok {
-			freeCashflow = companyData.CashFlow.FreeCashflow
+		var zonePosition *float64
+		if result.SupplyReached && result.DemandReached && result.SupplyAvg > result.DemandAvg {
+			pos := (last.Close - result.DemandAvg) / (result.SupplyAvg - result.DemandAvg)
+			zonePosition = &pos
+		}
 
-			if marketCap := companyData.OwnMarketCap(info.Symbol); marketCap != nil && *marketCap > 0 &&
+		var marketCap, numAnalysts, freeCashflow, netDebtToMarketCapPct, currentRatio, earningsGrowthPct *float64
+		if ok {
+			marketCap = companyData.OwnMarketCap(info.Symbol)
+			numAnalysts = companyData.Analyst.NumAnalysts
+			freeCashflow = companyData.CashFlow.FreeCashflow
+			currentRatio = companyData.BalanceSheet.CurrentRatio
+
+			if marketCap != nil && *marketCap > 0 &&
 				companyData.BalanceSheet.TotalDebt != nil && companyData.BalanceSheet.TotalCash != nil {
 				pct := (*companyData.BalanceSheet.TotalDebt - *companyData.BalanceSheet.TotalCash) / *marketCap * 100
 				netDebtToMarketCapPct = &pct
@@ -410,19 +442,35 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		var netOpenMarket *float64
+		if trades, _, ok, err := s.store.InsiderTrades(info.Symbol); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if ok {
+			net := openinsider.NetOpenMarket(openinsider.Within(trades, 365))
+			netOpenMarket = &net
+		}
+
 		scoreResult := score.Compute(score.Input{
-			Zone:                  zone,
 			Price:                 last.Close,
+			ZonePosition:          zonePosition,
 			RecommendationMean:    recommendationMean,
 			TargetMean:            targetMean,
+			NumAnalysts:           numAnalysts,
 			PERatio:               fundamentals.PERatio,
+			ForwardPERatio:        fundamentals.ForwardPERatio,
 			PEGRatio:              fundamentals.PEGRatio,
+			PSRatio:               fundamentals.PSRatio,
 			RevenueGrowthPct:      fundamentals.RevenueGrowthPct,
+			EarningsGrowthPct:     earningsGrowthPct,
 			NetMarginPct:          fundamentals.NetMarginPct,
 			OperatingMarginPct:    fundamentals.OperatingMarginPct,
+			ROICPct:               fundamentals.ROICPct,
+			MarketCap:             marketCap,
 			FreeCashflow:          freeCashflow,
 			NetDebtToMarketCapPct: netDebtToMarketCapPct,
-			EarningsGrowthPct:     earningsGrowthPct,
+			CurrentRatio:          currentRatio,
+			NetInsiderOpenMarket:  netOpenMarket,
 		})
 
 		row := screenerRowDTO{
@@ -438,11 +486,14 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			NetMarginPct:       fundamentals.NetMarginPct,
 			Score:              scoreResult.Total,
 			Qualified:          scoreResult.Qualified,
+			ScoreBreakdown:     scoreResult.Components,
 			RecommendationMean: recommendationMean,
 			RecommendationKey:  recommendationKey,
 			TargetMean:         targetMean,
 			UpsidePct:          scoreResult.UpsidePct,
 			Flags:              scoreResult.Flags,
+			NetOpenMarket:      netOpenMarket,
+			Note:               info.Note,
 		}
 		if len(bars) > 1 {
 			prev := bars[len(bars)-2]
@@ -462,6 +513,35 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 
 var tickerRe = regexp.MustCompile(`^[A-Z0-9.\-]{1,12}$`)
 
+func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Symbol string `json:"symbol"`
+		Note   string `json:"note"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, fmt.Sprintf("invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	symbol := strings.ToUpper(strings.TrimSpace(body.Symbol))
+	found, err := s.store.SetSymbolNote(symbol, strings.TrimSpace(body.Note))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, fmt.Sprintf("unknown symbol %q", symbol), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleInsider(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
 	if !tickerRe.MatchString(symbol) {
@@ -480,7 +560,7 @@ func (s *Server) handleInsider(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		prices = s.insiderPrices(symbol, days)
 	}()
-	trades, err := openinsider.FetchTrades(symbol, days)
+	trades, fetchedAt, err := s.insiderTrades(symbol, days)
 	wg.Wait()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -494,14 +574,46 @@ func (s *Server) handleInsider(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
-		"symbol": symbol,
-		"name":   name,
-		"days":   days,
-		"trades": trades,
-		"prices": prices,
+		"symbol":    symbol,
+		"name":      name,
+		"days":      days,
+		"trades":    trades,
+		"prices":    prices,
+		"fetchedAt": fetchedAt,
 	}); err != nil {
 		log.Printf("encoding /api/insider response: %v", err)
 	}
+}
+
+func (s *Server) insiderTrades(symbol string, days int) ([]openinsider.Trade, int64, error) {
+	if days > openinsider.WindowDays || !s.tracked(symbol) {
+		trades, err := openinsider.FetchTrades(symbol, days)
+		return trades, 0, err
+	}
+
+	trades, fetchedAt, ok, err := s.store.InsiderTrades(symbol)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !ok {
+		if trades, err = openinsider.Fetch(symbol, openinsider.WindowDays); err != nil {
+			return nil, 0, err
+		}
+		if err := s.store.SetInsiderTrades(symbol, trades); err != nil {
+			log.Printf("storing insider trades for %s: %v", symbol, err)
+		}
+		fetchedAt = time.Now()
+	}
+	return openinsider.Within(trades, days), fetchedAt.Unix(), nil
+}
+
+func (s *Server) tracked(symbol string) bool {
+	for _, sym := range s.config.Symbols {
+		if sym == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 type pricePointDTO struct {
