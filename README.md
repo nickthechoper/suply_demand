@@ -34,6 +34,19 @@ symbol's chart may be empty for a bit until its turn comes up — reload once
 the server log shows it's been fetched. Click "Refresh data" in the dashboard
 to force an immediate re-fetch of the currently open ticker.
 
+## Insider trades
+
+http://localhost:8080/insider.html looks up SEC Form 4 insider trades for any
+ticker (not just tracked ones) via OpenInsider, over the last 30 days to 2
+years (365 by default). It opens with a plain-language net buying/selling
+summary and open-market totals, plots every filing on the share price (from the
+local store for tracked tickers, Yahoo otherwise; click a marker to filter to
+that day), ranks insiders by open-market value, and lists all filings in a
+sortable, filterable table linking to each SEC filing. Filings OpenInsider
+flags as containing errors are marked. Results are cached in memory for
+10 minutes. Also reachable from the "Insider trades" link in the chart and
+list views, or directly as `insider.html?symbol=NVDA&days=90`.
+
 ## How the zones are computed
 
 The original Pine Script builds a volume profile from intrabar (lower-timeframe)

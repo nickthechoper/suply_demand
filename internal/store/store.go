@@ -18,7 +18,7 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening sqlite db: %w", err)
 	}
@@ -56,6 +56,17 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(`ALTER TABLE fundamentals ADD COLUMN forward_pe_ratio REAL`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("adding forward_pe_ratio column to fundamentals table: %w", err)
+		}
+	}
+
+	// operating_margin_pct, ps_ratio, and roic_pct were added after the
+	// fundamentals table shipped; back-fill them on existing databases that
+	// predate the columns.
+	for _, col := range []string{"operating_margin_pct", "ps_ratio", "roic_pct"} {
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE fundamentals ADD COLUMN %s REAL`, col)); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				return nil, fmt.Errorf("adding %s column to fundamentals table: %w", col, err)
+			}
 		}
 	}
 
@@ -168,29 +179,32 @@ func (s *Store) LatestBars(symbol string, limit int) ([]yahoo.Bar, error) {
 // SetFundamentals upserts the fundamentals snapshot for symbol, stamped with the current time.
 func (s *Store) SetFundamentals(symbol string, f yahoo.Fundamentals) error {
 	_, err := s.db.Exec(`
-		INSERT INTO fundamentals (symbol, pe_ratio, forward_pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO fundamentals (symbol, pe_ratio, forward_pe_ratio, peg_ratio, ps_ratio, revenue_growth_pct, net_margin_pct, operating_margin_pct, roic_pct, fetched_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(symbol) DO UPDATE SET
 			pe_ratio = excluded.pe_ratio,
 			forward_pe_ratio = excluded.forward_pe_ratio,
 			peg_ratio = excluded.peg_ratio,
+			ps_ratio = excluded.ps_ratio,
 			revenue_growth_pct = excluded.revenue_growth_pct,
 			net_margin_pct = excluded.net_margin_pct,
+			operating_margin_pct = excluded.operating_margin_pct,
+			roic_pct = excluded.roic_pct,
 			fetched_at = excluded.fetched_at
-	`, symbol, f.PERatio, f.ForwardPERatio, f.PEGRatio, f.RevenueGrowthPct, f.NetMarginPct, time.Now().Unix())
+	`, symbol, f.PERatio, f.ForwardPERatio, f.PEGRatio, f.PSRatio, f.RevenueGrowthPct, f.NetMarginPct, f.OperatingMarginPct, f.ROICPct, time.Now().Unix())
 	return err
 }
 
 // Fundamentals returns the stored fundamentals snapshot for symbol along with
 // when it was fetched. ok is false if nothing has been stored yet.
 func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt time.Time, ok bool, err error) {
-	var peRatio, forwardPERatio, pegRatio, revenueGrowthPct, netMarginPct sql.NullFloat64
+	var peRatio, forwardPERatio, pegRatio, psRatio, revenueGrowthPct, netMarginPct, operatingMarginPct, roicPct sql.NullFloat64
 	var ts int64
 	row := s.db.QueryRow(`
-		SELECT pe_ratio, forward_pe_ratio, peg_ratio, revenue_growth_pct, net_margin_pct, fetched_at
+		SELECT pe_ratio, forward_pe_ratio, peg_ratio, ps_ratio, revenue_growth_pct, net_margin_pct, operating_margin_pct, roic_pct, fetched_at
 		FROM fundamentals WHERE symbol = ?
 	`, symbol)
-	if scanErr := row.Scan(&peRatio, &forwardPERatio, &pegRatio, &revenueGrowthPct, &netMarginPct, &ts); scanErr != nil {
+	if scanErr := row.Scan(&peRatio, &forwardPERatio, &pegRatio, &psRatio, &revenueGrowthPct, &netMarginPct, &operatingMarginPct, &roicPct, &ts); scanErr != nil {
 		if scanErr == sql.ErrNoRows {
 			return f, time.Time{}, false, nil
 		}
@@ -205,11 +219,20 @@ func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt tim
 	if pegRatio.Valid {
 		f.PEGRatio = &pegRatio.Float64
 	}
+	if psRatio.Valid {
+		f.PSRatio = &psRatio.Float64
+	}
 	if revenueGrowthPct.Valid {
 		f.RevenueGrowthPct = &revenueGrowthPct.Float64
 	}
 	if netMarginPct.Valid {
 		f.NetMarginPct = &netMarginPct.Float64
+	}
+	if operatingMarginPct.Valid {
+		f.OperatingMarginPct = &operatingMarginPct.Float64
+	}
+	if roicPct.Valid {
+		f.ROICPct = &roicPct.Float64
 	}
 	return f, time.Unix(ts, 0).UTC(), true, nil
 }

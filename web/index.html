@@ -298,6 +298,7 @@
     </button>
     <span class="hint" title="Shift + scroll over the chart to jump to the next/previous tracked ticker">Shift+Scroll: next ticker</span>
     <a class="nav-link" href="list.html">List view</a>
+    <a class="nav-link" id="insider-link" href="insider.html">Insider trades</a>
     <button id="refresh">Refresh data</button>
   </header>
 
@@ -337,6 +338,7 @@
       <tr><td class="metric">PEG Ratio</td><td class="value" id="fund-peg">–</td></tr>
       <tr><td class="metric">Revenue Growth (YoY)</td><td class="value" id="fund-rev-growth">–</td></tr>
       <tr><td class="metric">Net Profit Margin</td><td class="value" id="fund-net-margin">–</td></tr>
+      <tr><td class="metric">Operating Margin (TTM)</td><td class="value" id="fund-operating-margin">–</td></tr>
     </table>
   </div>
 
@@ -373,7 +375,7 @@
       <div id="analyst-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card" id="card-peers">
+    <div class="company-card wide" id="card-peers">
       <h3>Peer Comparison</h3>
       <div id="peers-body"><span class="empty-note">Loading…</span></div>
     </div>
@@ -389,7 +391,7 @@
     </div>
 
     <div class="company-card double-wide" id="card-insider">
-      <h3>Recent Insider Transactions</h3>
+      <h3>Recent Insider Transactions <a id="insider-all-link" href="insider.html" style="float:right;font-size:12px;font-weight:400;">View all (365 days) →</a></h3>
       <div id="insider-body"><span class="empty-note">Loading…</span></div>
     </div>
 

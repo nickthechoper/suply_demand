@@ -112,6 +112,17 @@ func (d CompanyData) OwnName(symbol string) string {
 	return ""
 }
 
+// OwnMarketCap finds symbol's own market cap among the peer quotes
+// FetchCompanyData bundles in.
+func (d CompanyData) OwnMarketCap(symbol string) *float64 {
+	for _, p := range d.Peers {
+		if p.Symbol == symbol {
+			return p.MarketCap
+		}
+	}
+	return nil
+}
+
 type companyDataResponse struct {
 	QuoteSummary struct {
 		Result []struct {
@@ -336,6 +347,8 @@ func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string
 	if err != nil {
 		// Peer comparison is a nice-to-have; don't fail the whole fetch over it.
 		peers = nil
+	} else {
+		enrichPeerFundamentals(client, crumb, peers)
 	}
 	data.Peers = peers
 

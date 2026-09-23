@@ -13,6 +13,14 @@ function fmt(n) {
   return n === undefined || n === null || Number.isNaN(n) ? '–' : n.toFixed(2);
 }
 
+function fmtPct(n) {
+  return n === undefined || n === null || Number.isNaN(n) ? '–' : `${n.toFixed(2)}%`;
+}
+
+function pctClass(n) {
+  return n === undefined || n === null || Number.isNaN(n) ? '' : n >= 0 ? 'pos' : 'neg';
+}
+
 function zonePill(zone) {
   const label = zone === 'supply' ? 'Supply' : zone === 'demand' ? 'Demand' : '—';
   return `<span class="zone-pill ${zone}">${label}</span>`;
@@ -24,10 +32,15 @@ function ratingLabel(key) {
 }
 
 function scorePill(row) {
-  if (!row.qualified) return `<span class="score-pill score-na" title="Missing P/E, PEG, revenue growth, margin, or analyst data">N/A</span>`;
+  if (!row.qualified) return `<span class="score-pill score-na" title="Missing P/E, PEG, revenue growth, margin, operating margin, or analyst data">N/A</span>`;
   const score = row.score;
   const bucket = score >= 65 ? 'score-high' : score <= 35 ? 'score-low' : 'score-mid';
   return `<span class="score-pill ${bucket}">${Math.round(score)}</span>`;
+}
+
+function flagBadges(row) {
+  if (!row.flags || row.flags.length === 0) return '–';
+  return row.flags.map(f => `<span class="flag-badge">${f}</span>`).join('');
 }
 
 function matchesFilter(row) {
@@ -61,13 +74,16 @@ function render() {
       <td>${fmt(r.price)}</td>
       <td class="${r.changePct >= 0 ? 'pos' : 'neg'}">${r.changePct >= 0 ? '+' : ''}${fmt(r.changePct)}%</td>
       <td>${zonePill(r.zone)}</td>
-      <td>${r.demandReached ? fmt(r.demandBtm) : '–'}</td>
-      <td>${r.demandReached ? fmt(r.demandTop) : '–'}</td>
-      <td>${r.supplyReached ? fmt(r.supplyBtm) : '–'}</td>
-      <td>${r.supplyReached ? fmt(r.supplyTop) : '–'}</td>
+      <td>${fmt(r.pegRatio)}</td>
+      <td class="${pctClass(r.roicPct)}">${fmtPct(r.roicPct)}</td>
+      <td>${fmt(r.psRatio)}</td>
+      <td>${fmt(r.peRatio)}</td>
+      <td class="${pctClass(r.revenueGrowthPct)}">${fmtPct(r.revenueGrowthPct)}</td>
+      <td class="${pctClass(r.netMarginPct)}">${fmtPct(r.netMarginPct)}</td>
       <td>${ratingLabel(r.recommendationKey)}</td>
       <td class="${r.upsidePct >= 0 ? 'pos' : 'neg'}">${r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%`}</td>
       <td>${scorePill(r)}</td>
+      <td>${flagBadges(r)}</td>
     </tr>
   `).join('');
 

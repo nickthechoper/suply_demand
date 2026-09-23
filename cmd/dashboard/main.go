@@ -29,10 +29,11 @@ import (
 var defaultPeers = map[string][]string{
 	"MCD":  {"YUM", "SBUX", "QSR", "WEN"},
 	"GRAB": {"UBER", "DASH", "SE"},
+	"JOBY": {"ACHR", "LILM", "EH"},
 }
 
 func main() {
-	symbols := flag.String("symbols", "MCD,GRAB", "comma-separated ticker symbols to track")
+	symbols := flag.String("symbols", "MCD,GRAB,JOBY", "comma-separated ticker symbols to track")
 	symbolsCSV := flag.String("symbols-csv", "", "path to a CSV file with a \"Symbol\" column to import tickers from")
 	dbPath := flag.String("db", "data/dashboard.db", "path to the SQLite database file")
 	lookback := flag.Int("lookback", 500, "number of most recent daily bars used to build zones")
