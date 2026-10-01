@@ -19,9 +19,12 @@ import (
 	"syscall"
 	"time"
 
+	"supplydemand/internal/alert"
+	"supplydemand/internal/mail"
 	"supplydemand/internal/server"
 	"supplydemand/internal/store"
 	"supplydemand/internal/worker"
+	"supplydemand/internal/zones"
 )
 
 // defaultPeers gives each tracked symbol a sane P/E comparison set out of the
@@ -46,6 +49,16 @@ func main() {
 	fetchRange := flag.String("fetch-range", "5y", "Yahoo Finance history range to fetch")
 	fetchPacing := flag.Duration("fetch-pacing", time.Second, "delay between individual Yahoo Finance requests made by the background worker")
 	logPath := flag.String("log-file", "data/dashboard.log", "file that receives all log output, including routine fetch activity kept off the terminal")
+	alertTo := flag.String("alert-to", "", "comma-separated email addresses to notify when a symbol reaches the low end of its demand zone (enables alerts)")
+	alertCC := flag.String("alert-cc", "", "comma-separated CC addresses for alert emails")
+	alertBCC := flag.String("alert-bcc", "", "comma-separated BCC addresses for alert emails")
+	alertFromName := flag.String("alert-from-name", "Supply & Demand Dashboard", "sender display name for alert emails")
+	alertFrom := flag.String("alert-from", "", "sender address for alert emails (defaults to -alert-smtp-user)")
+	alertDepth := flag.Float64("alert-depth", 0.05, "how far up the demand zone, as a fraction of its height from the bottom, still counts as its low end")
+	smtpHost := flag.String("alert-smtp-host", "", "SMTP server host for alert emails, e.g. smtp.gmail.com")
+	smtpPort := flag.String("alert-smtp-port", "", "SMTP server port (465 uses implicit TLS, anything else uses STARTTLS when offered); defaults to the mail config, then 587")
+	smtpUser := flag.String("alert-smtp-user", "", "SMTP username; the password comes from ALERT_SMTP_PASSWORD or the mail config")
+	mailConfigPath := flag.String("mail-config", "config/mail.json", "JSON file with SMTP user, pass, host and port; flags and ALERT_SMTP_PASSWORD override it")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Dir(*logPath), 0o755); err != nil {
@@ -109,6 +122,41 @@ func main() {
 
 	worker.BackfillNames(st, trackedSymbols)
 
+	var afterBars func(symbol string)
+	if *alertTo != "" {
+		mailCfg, err := mail.LoadConfig(*mailConfigPath)
+		if err != nil {
+			log.Fatalf("loading mail config: %v", err)
+		}
+		password := mailCfg.Pass
+		if env := os.Getenv("ALERT_SMTP_PASSWORD"); env != "" {
+			password = env
+			log.Printf("using SMTP password from the ALERT_SMTP_PASSWORD environment variable, not %s", *mailConfigPath)
+		}
+		sender, err := newAlertSender(
+			firstNonEmpty(*smtpHost, mailCfg.Host),
+			firstNonEmpty(*smtpPort, mailCfg.PortString(), "587"),
+			firstNonEmpty(*smtpUser, mailCfg.User),
+			password,
+			*alertFrom,
+			*alertFromName,
+		)
+		if err != nil {
+			log.Fatalf("configuring alerts: %v", err)
+		}
+		afterBars = alert.New(alert.Config{
+			Store:    st,
+			Mailer:   sender,
+			To:       splitList(*alertTo),
+			CC:       splitList(*alertCC),
+			BCC:      splitList(*alertBCC),
+			Lookback: *lookback,
+			Params:   zones.Params{ThresholdPct: *threshold, Resolution: *resolution},
+			Depth:    *alertDepth,
+		}).Check
+		log.Printf("demand zone email alerts enabled for %s", *alertTo)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -120,6 +168,7 @@ func main() {
 			Peers:      defaultPeers,
 			FetchRange: *fetchRange,
 			Pacing:     *fetchPacing,
+			AfterBars:  afterBars,
 		})
 	}()
 
@@ -131,6 +180,7 @@ func main() {
 		Resolution:   *resolution,
 		WebDir:       *webDir,
 		Peers:        defaultPeers,
+		DeepDemand:   *alertDepth,
 	})
 
 	httpServer := &http.Server{
@@ -164,6 +214,41 @@ func main() {
 	case <-shutdownCtx.Done():
 		log.Printf("worker did not stop before shutdown timeout")
 	}
+}
+
+func newAlertSender(host, port, user, password, from, fromName string) (mail.Sender, error) {
+	if host == "" {
+		return mail.Sender{}, fmt.Errorf("SMTP host is required when -alert-to is set (-alert-smtp-host or the mail config)")
+	}
+	if user != "" && password == "" {
+		return mail.Sender{}, fmt.Errorf("SMTP password is not set (ALERT_SMTP_PASSWORD or the mail config)")
+	}
+	if from == "" {
+		from = user
+	}
+	if from == "" {
+		return mail.Sender{}, fmt.Errorf("sender address is required (-alert-from or the SMTP user)")
+	}
+	return mail.Sender{Host: host, Port: port, User: user, Password: password, FromAddr: from, FromName: fromName}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, item := range strings.Split(s, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // importSymbolsCSV reads the "Symbol" column from a CSV export (e.g. a

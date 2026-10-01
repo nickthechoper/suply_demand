@@ -8,3 +8,4 @@
 /server_restart.log
 .idea
 /data/*.log
+/config/mail.json

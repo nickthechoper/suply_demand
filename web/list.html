@@ -21,14 +21,20 @@
     --space-6: 28px;
   }
   * { box-sizing: border-box; }
-  html { scrollbar-gutter: stable; }
+  html { color-scheme: dark; }
   body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     margin: 0;
     font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
   }
   header {
+    flex: none;
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -52,6 +58,7 @@
   header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; cursor: default; user-select: none; }
 
   #toolbar {
+    flex: none;
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -80,8 +87,14 @@
   .filter-btn.active { background: var(--supply); border-color: var(--supply); color: #fff; }
   #count { color: var(--muted); font-size: 12px; margin-left: auto; }
 
-  #table-wrap { padding: var(--space-5) 0; overflow-x: auto; }
-  table { border-collapse: collapse; width: calc(100% - 2 * var(--space-6)); margin: 0 var(--space-6); font-size: 13px; }
+  #table-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0 var(--space-6) var(--space-5) 0;
+    scrollbar-color: #3a424d var(--bg);
+  }
+  table { border-collapse: separate; border-spacing: 0; width: calc(100% - var(--space-6)); margin: var(--space-5) 0 0 var(--space-6); font-size: 13px; }
   thead th {
     position: sticky;
     top: 0;
@@ -89,6 +102,8 @@
     text-align: right;
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--border);
+    border-left-width: 0;
+    z-index: 1;
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -100,6 +115,7 @@
   tbody td {
     padding: var(--space-2) var(--space-4);
     border: 1px solid var(--border);
+    border-width: 0 1px 1px 0;
     text-align: right;
     white-space: nowrap;
   }
@@ -107,6 +123,7 @@
   tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
   tbody tr:hover { background: rgba(33, 87, 243, 0.12); }
   thead th:first-child, tbody td:first-child {
+    border-left-width: 1px;
     position: sticky;
     left: 0;
     z-index: 1;
@@ -238,6 +255,7 @@
     <input id="search" type="text" placeholder="Filter by ticker, name or note…" autocomplete="off" spellcheck="false" />
     <button class="filter-btn active" data-zone="all">All</button>
     <button class="filter-btn" data-zone="demand">Demand Zone</button>
+    <button class="filter-btn" data-zone="deep-demand" id="deep-demand-btn">Demand Low</button>
     <button class="filter-btn" data-zone="supply">Supply Zone</button>
     <span id="count"></span>
   </div>

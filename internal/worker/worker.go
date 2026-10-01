@@ -67,6 +67,7 @@ type Config struct {
 	Peers      map[string][]string
 	FetchRange string
 	Pacing     time.Duration
+	AfterBars  func(symbol string)
 }
 
 // BackfillNames fills in company names for tracked symbols from company
@@ -266,6 +267,9 @@ func refreshBars(cfg Config, symbol string) outcome {
 		return failed
 	}
 	activity.Printf("worker: stored %d bars for %s (range %s)", len(bars), symbol, rangeStr)
+	if cfg.AfterBars != nil {
+		cfg.AfterBars(symbol)
+	}
 	return fetched
 }
 
