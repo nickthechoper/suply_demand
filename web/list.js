@@ -123,7 +123,9 @@ async function saveNote() {
 }
 
 function matchesFilter(row) {
-  if (zoneFilter !== 'all' && row.zone !== zoneFilter) return false;
+  if (zoneFilter === 'deep-demand') {
+    if (!row.deepDemand) return false;
+  } else if (zoneFilter !== 'all' && row.zone !== zoneFilter) return false;
   if (!query) return true;
   const q = query.toLowerCase();
   return row.symbol.toLowerCase().includes(q) || row.name.toLowerCase().includes(q) || (row.note || '').toLowerCase().includes(q);
@@ -238,6 +240,9 @@ async function init() {
   }
   const data = await resp.json();
   rows = data.rows || [];
+  if (data.deepDemandPct !== undefined) {
+    document.getElementById('deep-demand-btn').textContent = `Demand Low ${Number(data.deepDemandPct.toFixed(1))}%`;
+  }
   sortKey = 'score';
   sortDir = -1;
   render();

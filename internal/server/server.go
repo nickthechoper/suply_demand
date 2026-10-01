@@ -28,6 +28,7 @@ type Config struct {
 	Resolution   int
 	WebDir       string
 	Peers        map[string][]string // peer tickers used for P/E comparison, keyed by symbol
+	DeepDemand   float64             // fraction of the demand zone, measured up from its bottom, that counts as its low end
 }
 
 type Server struct {
@@ -346,6 +347,7 @@ type screenerRowDTO struct {
 	Price              float64           `json:"price"`
 	ChangePct          float64           `json:"changePct"`
 	Zone               string            `json:"zone"` // "supply", "demand", or "none"
+	DeepDemand         bool              `json:"deepDemand"`
 	PEGRatio           *float64          `json:"pegRatio"`
 	ROICPct            *float64          `json:"roicPct"`
 	PSRatio            *float64          `json:"psRatio"`
@@ -394,6 +396,9 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 		case result.DemandReached && last.Close >= result.DemandBtm && last.Close <= result.DemandTop:
 			zone = "demand"
 		}
+
+		deepDemand := zone == "demand" &&
+			last.Close <= result.DemandBtm+(result.DemandTop-result.DemandBtm)*s.config.DeepDemand
 
 		companyData, _, ok, err := s.store.CompanyData(info.Symbol)
 		if err != nil {
@@ -478,6 +483,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			Name:               info.Name,
 			Price:              last.Close,
 			Zone:               zone,
+			DeepDemand:         deepDemand,
 			PEGRatio:           fundamentals.PEGRatio,
 			ROICPct:            fundamentals.ROICPct,
 			PSRatio:            fundamentals.PSRatio,
@@ -506,7 +512,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"rows": rows}); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{"rows": rows, "deepDemandPct": s.config.DeepDemand * 100}); err != nil {
 		log.Printf("encoding /api/screener response: %v", err)
 	}
 }

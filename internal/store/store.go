@@ -124,6 +124,15 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("creating insider_trades table: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS demand_alerts (
+			symbol  TEXT PRIMARY KEY,
+			sent_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating demand_alerts table: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -327,6 +336,28 @@ func (s *Store) InsiderTrades(symbol string) (trades []openinsider.Trade, fetche
 		return nil, time.Time{}, false, fmt.Errorf("decoding stored insider trades: %w", err)
 	}
 	return trades, time.Unix(ts, 0).UTC(), true, nil
+}
+
+func (s *Store) DemandAlertSent(symbol string) (bool, error) {
+	var sentAt int64
+	err := s.db.QueryRow(`SELECT sent_at FROM demand_alerts WHERE symbol = ?`, symbol).Scan(&sentAt)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *Store) MarkDemandAlert(symbol string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO demand_alerts (symbol, sent_at) VALUES (?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET sent_at = excluded.sent_at
+	`, symbol, time.Now().Unix())
+	return err
+}
+
+func (s *Store) ClearDemandAlert(symbol string) error {
+	_, err := s.db.Exec(`DELETE FROM demand_alerts WHERE symbol = ?`, symbol)
+	return err
 }
 
 // UpsertSymbol adds symbol to the tracked list if it isn't already there.
