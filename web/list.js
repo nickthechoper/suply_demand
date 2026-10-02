@@ -2,6 +2,8 @@ const tableWrapEl = document.getElementById('table-wrap');
 const tableBodyEl = document.getElementById('table-body');
 const emptyNoteEl = document.getElementById('empty-note');
 const searchEl = document.getElementById('search');
+const themeFilterEl = document.getElementById('theme-filter');
+const sectorFilterEl = document.getElementById('sector-filter');
 const countEl = document.getElementById('count');
 const noteModalEl = document.getElementById('note-modal');
 const noteTitleEl = document.getElementById('note-title');
@@ -12,6 +14,8 @@ const noteSaveEl = document.getElementById('note-save');
 
 let rows = [];
 let zoneFilter = 'all';
+let themeFilter = 'all';
+let sectorFilter = 'all';
 let query = '';
 let sortKey = 'symbol';
 let sortDir = 1;
@@ -126,9 +130,15 @@ function matchesFilter(row) {
   if (zoneFilter === 'deep-demand') {
     if (!row.deepDemand) return false;
   } else if (zoneFilter !== 'all' && row.zone !== zoneFilter) return false;
+  if (themeFilter === 'ai') {
+    if (!row.aiTheme) return false;
+  } else if (themeFilter === 'non-ai') {
+    if (row.aiTheme) return false;
+  } else if (themeFilter !== 'all' && row.aiTheme !== themeFilter) return false;
+  if (sectorFilter !== 'all' && row.sector !== sectorFilter) return false;
   if (!query) return true;
   const q = query.toLowerCase();
-  return row.symbol.toLowerCase().includes(q) || row.name.toLowerCase().includes(q) || (row.note || '').toLowerCase().includes(q);
+  return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry].some(v => (v || '').toLowerCase().includes(q));
 }
 
 function sortRows(list) {
@@ -152,6 +162,9 @@ function render() {
     <tr data-symbol="${r.symbol}">
       <td class="symbol"><a class="cell-link" href="chart.html?symbol=${encodeURIComponent(r.symbol)}">${r.symbol}</a></td>
       <td class="name">${r.name || ''}</td>
+      <td>${r.aiTheme ? `<span class="theme-pill">${escapeHtml(r.aiTheme)}</span>` : '–'}</td>
+      <td class="sector">${escapeHtml(r.sector) || '–'}</td>
+      <td class="industry">${escapeHtml(r.industry) || '–'}</td>
       <td>${fmt(r.price)}</td>
       <td class="${r.changePct >= 0 ? 'pos' : 'neg'}">${r.changePct >= 0 ? '+' : ''}${fmt(r.changePct)}%</td>
       <td>${zonePill(r.zone)}</td>
@@ -217,6 +230,20 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   });
 });
 
+themeFilterEl.addEventListener('change', () => {
+  themeFilter = themeFilterEl.value;
+  render();
+});
+
+sectorFilterEl.addEventListener('change', () => {
+  sectorFilter = sectorFilterEl.value;
+  render();
+});
+
+function fillFilterOptions(el, values, labelFor = v => v) {
+  el.insertAdjacentHTML('beforeend', values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(labelFor(v))}</option>`).join(''));
+}
+
 searchEl.addEventListener('input', () => {
   query = searchEl.value.trim();
   render();
@@ -243,6 +270,10 @@ async function init() {
   if (data.deepDemandPct !== undefined) {
     document.getElementById('deep-demand-btn').textContent = `Demand Low ${Number(data.deepDemandPct.toFixed(1))}%`;
   }
+  const count = key => rows.filter(r => r[key]).length;
+  fillFilterOptions(themeFilterEl, (data.aiThemes || []).filter(t => rows.some(r => r.aiTheme === t)));
+  fillFilterOptions(sectorFilterEl, [...new Set(rows.map(r => r.sector).filter(Boolean))].sort());
+  themeFilterEl.querySelector('[value="ai"]').textContent = `All AI (${count('aiTheme')})`;
   sortKey = 'score';
   sortDir = -1;
   render();

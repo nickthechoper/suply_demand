@@ -64,6 +64,16 @@ symbol's chart may be empty for a bit until its turn comes up — reload once
 the server log shows it's been fetched. Click "Refresh data" in the dashboard
 to force an immediate re-fetch of the currently open ticker.
 
+## AI categories
+
+The list view shows each ticker's AI theme, Yahoo sector, and Yahoo industry, with
+dropdown filters for theme (including "All AI" and "Non-AI") and sector. Themes
+(AI chips, foundry and equipment, memory, networking, servers, data center power
+and REITs, neoclouds, hyperscalers, software, energy, robotics, and so on) come
+from a curated ticker map in [internal/category/category.go](internal/category/category.go);
+add a symbol to a theme's list there to categorise it. Tickers not in the map show
+no theme and are still filterable by sector.
+
 ## Insider trades
 
 http://localhost:8080/insider.html looks up SEC Form 4 insider trades for any

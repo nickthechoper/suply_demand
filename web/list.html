@@ -85,6 +85,25 @@
   }
   .filter-btn:hover, .modal-btn:hover { border-color: var(--supply); }
   .filter-btn.active { background: var(--supply); border-color: var(--supply); color: #fff; }
+  #theme-filter, #sector-filter {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 8px;
+    font-size: 13px;
+    max-width: 220px;
+  }
+  .theme-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(168, 120, 255, 0.2);
+    color: #c3a2ff;
+  }
+  td.sector, td.industry { color: var(--muted); }
   #count { color: var(--muted); font-size: 12px; margin-left: auto; }
 
   #table-wrap {
@@ -111,7 +130,7 @@
   }
   thead th:hover { color: var(--text); }
   thead th.sorted { color: var(--text); }
-  thead th:first-child, thead th:nth-child(2) { text-align: left; }
+  thead th:nth-child(-n+5) { text-align: left; }
   tbody td {
     padding: var(--space-2) var(--space-4);
     border: 1px solid var(--border);
@@ -119,7 +138,7 @@
     text-align: right;
     white-space: nowrap;
   }
-  tbody td:first-child, tbody td:nth-child(2) { text-align: left; }
+  tbody td:nth-child(-n+5) { text-align: left; }
   tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
   tbody tr:hover { background: rgba(33, 87, 243, 0.12); }
   thead th:first-child, tbody td:first-child {
@@ -257,6 +276,14 @@
     <button class="filter-btn" data-zone="demand">Demand Zone</button>
     <button class="filter-btn" data-zone="deep-demand" id="deep-demand-btn">Demand Low</button>
     <button class="filter-btn" data-zone="supply">Supply Zone</button>
+    <select id="theme-filter" title="Filter by AI theme">
+      <option value="all">All themes</option>
+      <option value="ai">All AI</option>
+      <option value="non-ai">Non-AI</option>
+    </select>
+    <select id="sector-filter" title="Filter by sector">
+      <option value="all">All sectors</option>
+    </select>
     <span id="count"></span>
   </div>
 
@@ -266,6 +293,9 @@
         <tr>
           <th data-key="symbol">Symbol</th>
           <th data-key="name">Name</th>
+          <th data-key="aiTheme">AI Theme</th>
+          <th data-key="sector">Sector</th>
+          <th data-key="industry">Industry</th>
           <th data-key="price">Price</th>
           <th data-key="changePct">Chg %</th>
           <th data-key="zone">Zone</th>

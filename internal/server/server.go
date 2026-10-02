@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"supplydemand/internal/category"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/score"
 	"supplydemand/internal/store"
@@ -364,6 +365,9 @@ type screenerRowDTO struct {
 	Flags              []string          `json:"flags"`
 	NetOpenMarket      *float64          `json:"netOpenMarket"`
 	Note               string            `json:"note"`
+	Sector             string            `json:"sector"`
+	Industry           string            `json:"industry"`
+	AITheme            string            `json:"aiTheme"`
 }
 
 // handleScreener returns every tracked symbol's latest price and current
@@ -500,6 +504,11 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			Flags:              scoreResult.Flags,
 			NetOpenMarket:      netOpenMarket,
 			Note:               info.Note,
+			AITheme:            category.Theme(info.Symbol),
+		}
+		if ok {
+			row.Sector = companyData.Profile.Sector
+			row.Industry = companyData.Profile.Industry
 		}
 		if len(bars) > 1 {
 			prev := bars[len(bars)-2]
@@ -512,7 +521,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"rows": rows, "deepDemandPct": s.config.DeepDemand * 100}); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{"rows": rows, "deepDemandPct": s.config.DeepDemand * 100, "aiThemes": category.Themes()}); err != nil {
 		log.Printf("encoding /api/screener response: %v", err)
 	}
 }
