@@ -20,7 +20,7 @@ const chart = LightweightCharts.createChart(chartEl, {
   },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   handleScroll: { mouseWheel: false },
-  handleScale: { mouseWheel: false },
+  handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false },
 });
 
 const candleSeries = chart.addCandlestickSeries({
@@ -309,6 +309,8 @@ let currentZones = null;
 let barsAscending = [];
 let barTimeToIndex = new Map();
 let currentSymbol = '';
+let zoneStartTime = null;
+let zoneEndTime = null;
 
 new ResizeObserver(entries => {
   for (const entry of entries) {
@@ -320,6 +322,12 @@ new ResizeObserver(entries => {
 chart.timeScale().subscribeVisibleLogicalRangeChange(() => updateZoneBoxes());
 
 function positionBox(el, topPrice, bottomPrice, visible) {
+  const xStart = zoneStartTime === null ? null : chart.timeScale().timeToCoordinate(zoneStartTime);
+  const xEnd = zoneEndTime === null ? null : chart.timeScale().timeToCoordinate(zoneEndTime);
+  const width = chartEl.clientWidth - PRICE_SCALE_WIDTH;
+  const left = Math.max(0, xStart === null ? 0 : xStart);
+  const right = Math.min(width, xEnd === null ? width : xEnd);
+  if (right <= left) visible = false;
   if (!visible) {
     el.style.display = 'none';
     return;
@@ -331,6 +339,9 @@ function positionBox(el, topPrice, bottomPrice, visible) {
     return;
   }
   el.style.display = 'block';
+  el.style.left = `${left}px`;
+  el.style.width = `${right - left}px`;
+  el.style.right = 'auto';
   el.style.top = `${Math.min(yTop, yBottom)}px`;
   el.style.height = `${Math.max(1, Math.abs(yBottom - yTop))}px`;
 }
@@ -475,6 +486,9 @@ async function loadData() {
   currentSymbol = data.symbol;
 
   barsAscending = data.bars;
+  const zoneFirstIdx = Math.max(0, barsAscending.length - (data.lookbackBars || barsAscending.length));
+  zoneStartTime = barsAscending.length ? barsAscending[zoneFirstIdx].time : null;
+  zoneEndTime = barsAscending.length ? barsAscending[barsAscending.length - 1].time : null;
   barTimeToIndex = new Map(barsAscending.map((b, i) => [b.time, i]));
   updateAllRangePerformance();
 

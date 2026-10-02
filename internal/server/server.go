@@ -90,6 +90,7 @@ type fundamentalsDTO struct {
 type dataResponse struct {
 	Symbol       string          `json:"symbol"`
 	Bars         []barDTO        `json:"bars"`
+	LookbackBars int             `json:"lookbackBars"`
 	Zones        zonesDTO        `json:"zones"`
 	Fundamentals fundamentalsDTO `json:"fundamentals"`
 }
@@ -243,8 +244,9 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := dataResponse{
-		Symbol: symbol,
-		Bars:   barDTOs,
+		Symbol:       symbol,
+		Bars:         barDTOs,
+		LookbackBars: min(len(bars), s.config.Lookback),
 		Fundamentals: fundamentalsDTO{
 			PERatio:            fundamentals.PERatio,
 			ForwardPERatio:     fundamentals.ForwardPERatio,
