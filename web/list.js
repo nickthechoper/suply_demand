@@ -65,6 +65,14 @@ function scorePill(row) {
   return `<span class="score-pill ${bucket}" title="${breakdown}">${Math.round(score)}</span>`;
 }
 
+function creditPill(row) {
+  if (!row.credit) return '–';
+  const rank = row.creditRank;
+  const bucket = rank === null || rank === undefined ? 'credit-unranked' : rank >= 16 ? 'credit-high' : rank >= 13 ? 'credit-mid' : 'credit-low';
+  const title = [row.creditOutlook ? `S&P outlook: ${row.creditOutlook}` : 'S&P credit rating', row.creditSource ? `source: ${row.creditSource}` : ''].filter(Boolean).join(' · ');
+  return `<span class="credit-pill ${bucket}" title="${escapeHtml(title)}">${escapeHtml(row.credit)}</span>`;
+}
+
 function flagBadges(row) {
   if (!row.flags || row.flags.length === 0) return '–';
   return row.flags.map(f => `<span class="flag-badge">${f}</span>`).join('');
@@ -138,7 +146,7 @@ function matchesFilter(row) {
   if (sectorFilter !== 'all' && row.sector !== sectorFilter) return false;
   if (!query) return true;
   const q = query.toLowerCase();
-  return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry].some(v => (v || '').toLowerCase().includes(q));
+  return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry, row.credit].some(v => (v || '').toLowerCase().includes(q));
 }
 
 function sortRows(list) {
@@ -174,6 +182,7 @@ function render() {
       <td>${fmt(r.peRatio)}</td>
       <td class="${pctClass(r.revenueGrowthPct)}">${fmtPct(r.revenueGrowthPct)}</td>
       <td class="${pctClass(r.netMarginPct)}">${fmtPct(r.netMarginPct)}</td>
+      <td>${creditPill(r)}</td>
       <td>${ratingLabel(r.recommendationKey)}</td>
       <td class="${r.upsidePct >= 0 ? 'pos' : 'neg'}">${r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%`}</td>
       <td class="${r.netOpenMarket ? pctClass(r.netOpenMarket) : ''}"><a class="cell-link" href="insider.html?symbol=${encodeURIComponent(r.symbol)}">${fmtNetUsd(r.netOpenMarket)}</a></td>

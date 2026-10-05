@@ -104,6 +104,18 @@
     color: #c3a2ff;
   }
   td.sector, td.industry { color: var(--muted); }
+  .credit-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .credit-pill.credit-high { background: rgba(38, 166, 154, 0.2); color: #4dd0c4; }
+  .credit-pill.credit-mid { background: rgba(255, 193, 7, 0.18); color: #ffd54f; }
+  .credit-pill.credit-low { background: rgba(239, 83, 80, 0.18); color: #ef8b88; }
+  .credit-pill.credit-unranked { background: rgba(154, 164, 175, 0.18); color: var(--muted); }
   #count { color: var(--muted); font-size: 12px; margin-left: auto; }
 
   #table-wrap {
@@ -305,6 +317,7 @@
           <th data-key="peRatio">P/E</th>
           <th data-key="revenueGrowthPct">Revenue Growth (YoY)</th>
           <th data-key="netMarginPct">Net Profit Margin</th>
+          <th data-key="creditRank" title="S&P Global issuer credit rating, from config/credit_ratings.csv">Credit (S&amp;P)</th>
           <th data-key="recommendationKey">Rating</th>
           <th data-key="upsidePct">Target Upside</th>
           <th data-key="netOpenMarket" title="Open-market insider purchases minus sales over the last 12 months">Net Open-Market (12M)</th>

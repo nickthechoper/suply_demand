@@ -3,9 +3,6 @@
 /data/*.db
 /data/*.db-shm
 /data/*.db-wal
-/server.log
-/server_run.log
-/server_restart.log
 .idea
 /data/*.log
 /config/mail.json

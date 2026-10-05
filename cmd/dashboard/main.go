@@ -1,7 +1,3 @@
-// Command dashboard runs a local web server that shows supply/demand/
-// equilibrium zones for one or more tickers, replicating LuxAlgo's
-// "Supply and Demand Fixed Range" Pine Script indicator using data fetched
-// from Yahoo Finance and stored in SQLite.
 package main
 
 import (
@@ -20,16 +16,15 @@ import (
 	"time"
 
 	"supplydemand/internal/alert"
+	"supplydemand/internal/credit"
 	"supplydemand/internal/mail"
+	"supplydemand/internal/sec"
 	"supplydemand/internal/server"
 	"supplydemand/internal/store"
 	"supplydemand/internal/worker"
 	"supplydemand/internal/zones"
 )
 
-// defaultPeers gives each tracked symbol a sane P/E comparison set out of the
-// box. Add an entry here when tracking a new symbol via -symbols; tickers
-// without an entry just get an empty peer comparison rather than an error.
 var defaultPeers = map[string][]string{
 	"MCD":  {"YUM", "SBUX", "QSR", "WEN"},
 	"GRAB": {"UBER", "DASH", "SE"},
@@ -59,6 +54,9 @@ func main() {
 	smtpPort := flag.String("alert-smtp-port", "", "SMTP server port (465 uses implicit TLS, anything else uses STARTTLS when offered); defaults to the mail config, then 587")
 	smtpUser := flag.String("alert-smtp-user", "", "SMTP username; the password comes from ALERT_SMTP_PASSWORD or the mail config")
 	mailConfigPath := flag.String("mail-config", "config/mail.json", "JSON file with SMTP user, pass, host and port; flags and ALERT_SMTP_PASSWORD override it")
+	creditPath := flag.String("credit-ratings", "config/credit_ratings.csv", "CSV file with Symbol, Rating and Outlook columns holding S&P issuer credit ratings; edits are picked up without a restart")
+	secUserAgent := flag.String("sec-user-agent", "", "identity sent to SEC EDGAR, e.g. \"Your Name you@example.com\"; overrides SEC_USER_AGENT and the SEC config file")
+	secConfigPath := flag.String("sec-config", "config/sec.json", "JSON file with the userAgent identity sent to SEC EDGAR; enables reading S&P credit ratings from 10-K and 10-Q filings")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Dir(*logPath), 0o755); err != nil {
@@ -85,9 +83,6 @@ func main() {
 		}
 	})
 
-	// Only fall back to -symbols' default when nothing is tracked yet and no
-	// CSV was given; otherwise a bare `go run ./cmd/dashboard` should just
-	// use whatever's already persisted in the database.
 	existing, err := st.ListSymbols()
 	if err != nil {
 		log.Fatalf("listing tracked symbols: %v", err)
@@ -157,6 +152,18 @@ func main() {
 		log.Printf("demand zone email alerts enabled for %s", *alertTo)
 	}
 
+	secFileAgent, err := sec.LoadUserAgent(*secConfigPath)
+	if err != nil {
+		log.Fatalf("loading SEC config: %v", err)
+	}
+	var secClient *sec.Client
+	if agent := firstNonEmpty(*secUserAgent, os.Getenv("SEC_USER_AGENT"), secFileAgent); agent != "" {
+		secClient = sec.NewClient(agent)
+		log.Printf("reading S&P credit ratings from SEC filings")
+	} else {
+		log.Printf("credit ratings from SEC filings are off: set userAgent in %s, pass -sec-user-agent, or set SEC_USER_AGENT", *secConfigPath)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -169,6 +176,7 @@ func main() {
 			FetchRange: *fetchRange,
 			Pacing:     *fetchPacing,
 			AfterBars:  afterBars,
+			SEC:        secClient,
 		})
 	}()
 
@@ -181,6 +189,8 @@ func main() {
 		WebDir:       *webDir,
 		Peers:        defaultPeers,
 		DeepDemand:   *alertDepth,
+		Credit:       credit.NewSource(*creditPath),
+		SEC:          secClient,
 	})
 
 	httpServer := &http.Server{
@@ -251,10 +261,6 @@ func splitList(s string) []string {
 	return out
 }
 
-// importSymbolsCSV reads the "Symbol" column from a CSV export (e.g. a
-// TradingView screener export) and tracks each ticker. Symbols are
-// normalized from the dotted share-class notation some providers use
-// (BRK.A) to the dash Yahoo Finance actually expects (BRK-A).
 func importSymbolsCSV(st *store.Store, path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {

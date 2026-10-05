@@ -1,4 +1,3 @@
-// Package server exposes the dashboard's HTTP API and static frontend.
 package server
 
 import (
@@ -14,22 +13,27 @@ import (
 	"time"
 
 	"supplydemand/internal/category"
+	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/score"
+	"supplydemand/internal/sec"
 	"supplydemand/internal/store"
+	"supplydemand/internal/worker"
 	"supplydemand/internal/yahoo"
 	"supplydemand/internal/zones"
 )
 
 type Config struct {
-	Symbols      []string // tracked tickers; the first is the default
-	Lookback     int      // number of most recent bars used to compute supply/demand zones
-	ChartBars    int      // number of most recent bars served for display (>= Lookback, gives range buttons like 2Y room to work)
+	Symbols      []string
+	Lookback     int
+	ChartBars    int
 	ThresholdPct float64
 	Resolution   int
 	WebDir       string
-	Peers        map[string][]string // peer tickers used for P/E comparison, keyed by symbol
-	DeepDemand   float64             // fraction of the demand zone, measured up from its bottom, that counts as its low end
+	Peers        map[string][]string
+	DeepDemand   float64
+	Credit       *credit.Source
+	SEC          *sec.Client
 }
 
 type Server struct {
@@ -42,7 +46,7 @@ func New(st *store.Store, cfg Config) *Server {
 }
 
 type barDTO struct {
-	Time   int64   `json:"time"` // unix seconds, UTC
+	Time   int64   `json:"time"`
 	Open   float64 `json:"open"`
 	High   float64 `json:"high"`
 	Low    float64 `json:"low"`
@@ -63,17 +67,12 @@ type zonesDTO struct {
 	SupplyReached bool    `json:"supplyReached"`
 	SupplyTop     float64 `json:"supplyTop"`
 	SupplyBtm     float64 `json:"supplyBtm"`
-	SupplyAvg     float64 `json:"supplyAvg"`
-	SupplyWavg    float64 `json:"supplyWavg"`
 
 	DemandReached bool    `json:"demandReached"`
 	DemandTop     float64 `json:"demandTop"`
 	DemandBtm     float64 `json:"demandBtm"`
-	DemandAvg     float64 `json:"demandAvg"`
-	DemandWavg    float64 `json:"demandWavg"`
 
-	EquilibriumAvg  float64 `json:"equilibriumAvg"`
-	EquilibriumWavg float64 `json:"equilibriumWavg"`
+	EquilibriumAvg float64 `json:"equilibriumAvg"`
 
 	Profile []profileBinDTO `json:"profile"`
 }
@@ -115,8 +114,6 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// zonesFromBars computes supply/demand/equilibrium zones from the trailing
-// Lookback bars of the given (oldest-to-newest) bar slice.
 func (s *Server) zonesFromBars(bars []yahoo.Bar) zones.Result {
 	zoneSourceBars := bars
 	if len(zoneSourceBars) > s.config.Lookback {
@@ -132,9 +129,6 @@ func (s *Server) zonesFromBars(bars []yahoo.Bar) zones.Result {
 	})
 }
 
-// symbolFor resolves the requested ticker from the "symbol" query param
-// against the configured symbol list, defaulting to the first configured
-// symbol when the param is absent. ok is false if an unknown symbol was requested.
 func (s *Server) symbolFor(r *http.Request) (symbol string, ok bool) {
 	requested := r.URL.Query().Get("symbol")
 	if requested == "" {
@@ -169,9 +163,6 @@ func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"symbols": symbols})
 }
 
-// handleCompany returns the stored company profile, analyst targets,
-// ownership, financials, filings, and peer comparison for the requested
-// symbol.
 func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
 	symbol, ok := s.symbolFor(r)
 	if !ok {
@@ -188,10 +179,38 @@ func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resp := struct {
+		yahoo.CompanyData
+		Credit *creditDTO `json:"credit"`
+	}{CompanyData: data}
+	if rating, ok := s.creditRatings()[symbol]; ok {
+		resp.Credit = &creditDTO{Rating: rating.Rating, Outlook: rating.Outlook, Source: rating.Origin()}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(data); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("encoding /api/company response: %v", err)
 	}
+}
+
+type creditDTO struct {
+	Rating  string `json:"rating"`
+	Outlook string `json:"outlook"`
+	Source  string `json:"source"`
+}
+
+func (s *Server) creditRatings() map[string]credit.Rating {
+	merged, err := s.store.CreditRatings()
+	if err != nil {
+		log.Printf("loading stored credit ratings: %v", err)
+		merged = map[string]credit.Rating{}
+	}
+	if s.config.Credit != nil {
+		for symbol, rating := range s.config.Credit.Snapshot() {
+			merged[symbol] = rating
+		}
+	}
+	return merged
 }
 
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
@@ -228,8 +247,6 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Zones are computed off the most recent Lookback bars, which may be a
-	// tail slice of the larger set served for display.
 	result := s.zonesFromBars(bars)
 
 	profileDTOs := make([]profileBinDTO, len(result.Profile))
@@ -256,21 +273,16 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 			OperatingMarginPct: fundamentals.OperatingMarginPct,
 		},
 		Zones: zonesDTO{
-			Max:             result.Max,
-			Min:             result.Min,
-			SupplyReached:   result.SupplyReached,
-			SupplyTop:       result.SupplyTop,
-			SupplyBtm:       result.SupplyBtm,
-			SupplyAvg:       result.SupplyAvg,
-			SupplyWavg:      result.SupplyWavg,
-			DemandReached:   result.DemandReached,
-			DemandTop:       result.DemandTop,
-			DemandBtm:       result.DemandBtm,
-			DemandAvg:       result.DemandAvg,
-			DemandWavg:      result.DemandWavg,
-			EquilibriumAvg:  result.EquilibriumAvg,
-			EquilibriumWavg: result.EquilibriumWavg,
-			Profile:         profileDTOs,
+			Max:            result.Max,
+			Min:            result.Min,
+			SupplyReached:  result.SupplyReached,
+			SupplyTop:      result.SupplyTop,
+			SupplyBtm:      result.SupplyBtm,
+			DemandReached:  result.DemandReached,
+			DemandTop:      result.DemandTop,
+			DemandBtm:      result.DemandBtm,
+			EquilibriumAvg: result.EquilibriumAvg,
+			Profile:        profileDTOs,
 		},
 	}
 
@@ -280,9 +292,6 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRefresh re-fetches the full daily history, fundamentals and company
-// data from Yahoo Finance and insider trades from OpenInsider for the
-// requested symbol, and upserts them into the store.
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	symbol, ok := s.symbolFor(r)
 	if !ok {
@@ -334,6 +343,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		insiderTradesFetched = false
 	}
 
+	creditRatingFetched := false
+	if s.config.SEC != nil {
+		creditRatingFetched = worker.RefreshCredit(s.store, s.config.SEC, symbol)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"symbol":               symbol,
@@ -341,6 +355,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		"fundamentalsFetched":  fundamentalsFetched,
 		"companyDataFetched":   companyDataFetched,
 		"insiderTradesFetched": insiderTradesFetched,
+		"creditRatingFetched":  creditRatingFetched,
 	})
 }
 
@@ -349,7 +364,7 @@ type screenerRowDTO struct {
 	Name               string            `json:"name"`
 	Price              float64           `json:"price"`
 	ChangePct          float64           `json:"changePct"`
-	Zone               string            `json:"zone"` // "supply", "demand", or "none"
+	Zone               string            `json:"zone"`
 	DeepDemand         bool              `json:"deepDemand"`
 	PEGRatio           *float64          `json:"pegRatio"`
 	ROICPct            *float64          `json:"roicPct"`
@@ -370,10 +385,12 @@ type screenerRowDTO struct {
 	Sector             string            `json:"sector"`
 	Industry           string            `json:"industry"`
 	AITheme            string            `json:"aiTheme"`
+	Credit             string            `json:"credit"`
+	CreditOutlook      string            `json:"creditOutlook"`
+	CreditSource       string            `json:"creditSource"`
+	CreditRank         *int              `json:"creditRank"`
 }
 
-// handleScreener returns every tracked symbol's latest price and current
-// supply/demand zone status, for the spreadsheet-style list view.
 func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 	infos, err := s.store.ListSymbolInfo()
 	if err != nil {
@@ -381,6 +398,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	creditRatings := s.creditRatings()
 	rows := make([]screenerRowDTO, 0, len(infos))
 	for _, info := range infos {
 		bars, err := s.store.LatestBars(info.Symbol, s.config.Lookback)
@@ -462,6 +480,13 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			netOpenMarket = &net
 		}
 
+		rating, hasRating := creditRatings[info.Symbol]
+		var creditRank *float64
+		if hasRating && rating.Rank > 0 {
+			rank := float64(rating.Rank)
+			creditRank = &rank
+		}
+
 		scoreResult := score.Compute(score.Input{
 			Price:                 last.Close,
 			ZonePosition:          zonePosition,
@@ -482,6 +507,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			NetDebtToMarketCapPct: netDebtToMarketCapPct,
 			CurrentRatio:          currentRatio,
 			NetInsiderOpenMarket:  netOpenMarket,
+			CreditRank:            creditRank,
 		})
 
 		row := screenerRowDTO{
@@ -511,6 +537,15 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			row.Sector = companyData.Profile.Sector
 			row.Industry = companyData.Profile.Industry
+		}
+		if hasRating {
+			row.Credit = rating.Rating
+			row.CreditOutlook = rating.Outlook
+			row.CreditSource = rating.Origin()
+			if rating.Rank > 0 {
+				rank := rating.Rank
+				row.CreditRank = &rank
+			}
 		}
 		if len(bars) > 1 {
 			prev := bars[len(bars)-2]
