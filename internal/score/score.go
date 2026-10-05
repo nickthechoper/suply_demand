@@ -20,6 +20,7 @@ type Input struct {
 	NetDebtToMarketCapPct *float64
 	CurrentRatio          *float64
 	NetInsiderOpenMarket  *float64
+	CreditRank            *float64
 }
 
 type Component struct {
@@ -67,15 +68,17 @@ var (
 	upsideCurve          = curve{{-20, 0}, {0, 30}, {15, 65}, {30, 90}, {50, 100}}
 	zoneCurve            = curve{{0, 100}, {1, 0}}
 	insiderBpsCurve      = curve{{-50, 30}, {-5, 45}, {0, 50}, {1, 70}, {10, 100}}
+	creditCurve          = curve{{1, 0}, {7, 5}, {10, 20}, {13, 50}, {16, 75}, {19, 92}, {22, 100}}
 )
 
 const (
-	weightValuation = 25
-	weightQuality   = 25
-	weightGrowth    = 15
-	weightAnalyst   = 15
-	weightZone      = 15
-	weightInsider   = 5
+	weightValuation = 21
+	weightQuality   = 21
+	weightGrowth    = 13
+	weightAnalyst   = 13
+	weightZone      = 13
+	weightInsider   = 4
+	weightCredit    = 15
 
 	minCoverage = 0.6
 )
@@ -166,6 +169,9 @@ func Compute(in Input) Result {
 		insider.add(&bps, insiderBpsCurve)
 	}
 
+	var creditBucket bucket
+	creditBucket.add(in.CreditRank, creditCurve)
+
 	components := []Component{
 		{Name: "Valuation", Weight: weightValuation, Score: valuation.mean()},
 		{Name: "Quality", Weight: weightQuality, Score: quality.mean()},
@@ -173,10 +179,14 @@ func Compute(in Input) Result {
 		{Name: "Analyst", Weight: weightAnalyst, Score: analystScore},
 		{Name: "Zone", Weight: weightZone, Score: zone.mean()},
 		{Name: "Insider", Weight: weightInsider, Score: insider.mean()},
+		{Name: "Credit", Weight: weightCredit, Score: creditBucket.mean()},
 	}
 
 	var weighted, covered, total float64
 	for _, c := range components {
+		if c.Name == "Credit" && c.Score == nil {
+			continue
+		}
 		total += c.Weight
 		if c.Score != nil {
 			weighted += *c.Score * c.Weight

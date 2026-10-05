@@ -31,9 +31,6 @@ const candleSeries = chart.addCandlestickSeries({
   wickDownColor: '#ef5350',
 });
 
-// Volume histogram squeezed into the bottom of the same pane via its own
-// overlay price scale (priceScaleId: '' hides its axis), the standard
-// lightweight-charts recipe for a "volume below the chart" panel.
 const volumeSeries = chart.addHistogramSeries({
   priceFormat: { type: 'volume' },
   priceScaleId: '',
@@ -353,9 +350,6 @@ function updateZoneBoxes() {
   positionBox(demandBoxEl, z.demandTop, z.demandBtm, z.demandReached);
 }
 
-// The chart's price scale isn't laid out synchronously after setData/fitContent,
-// so priceToCoordinate can briefly return null; retry across a couple of frames
-// plus a short timeout to catch it once layout settles.
 function scheduleZoneBoxUpdate() {
   requestAnimationFrame(() => {
     updateZoneBoxes();
@@ -384,8 +378,6 @@ function fmtMoney(n) {
   return n === undefined || n === null || Number.isNaN(n) ? 'n/a' : '$' + fmtCompact(n);
 }
 
-// Ownership/insider percentages come from Yahoo as fractions (0.0783), unlike
-// the pre-converted percentages already in the fundamentals table.
 function fmtFractionPct(n) {
   if (n === undefined || n === null || Number.isNaN(n)) return 'n/a';
   return (n * 100).toFixed(2) + '%';
@@ -541,8 +533,6 @@ async function loadData() {
 const RANGE_DAYS = { '1D': 1, '1W': 7, '1M': 30, '3M': 91, '6M': 182, '1Y': 365, '2Y': 730 };
 let activeRange = '2Y';
 
-// Finds the bar closest to `days` calendar days before the last loaded bar,
-// clamped so the window always has at least two bars.
 function findStartBarForDays(days) {
   const lastBar = barsAscending[barsAscending.length - 1];
   const targetTime = lastBar.time - days * 86400;
@@ -562,8 +552,6 @@ function setPctLabel(key, fromBar, toBar) {
   el.style.color = change >= 0 ? '#26a69a' : '#ef5350';
 }
 
-// Computes and displays performance for every range button at once, so the
-// figures are visible without clicking through each one.
 function updateAllRangePerformance() {
   if (!barsAscending.length) return;
   const lastBar = barsAscending[barsAscending.length - 1];
@@ -572,9 +560,6 @@ function updateAllRangePerformance() {
   }
 }
 
-// Re-fits the chart to the currently selected interval (undoing any manual
-// pan/zoom) without changing which interval is selected. Falls back to the
-// full loaded range if no interval is active.
 function resetZoom() {
   if (!barsAscending.length) return;
   if (activeRange) {
@@ -673,15 +658,17 @@ function renderPeers(peers, symbol) {
   el.innerHTML = `<table><tr><th>Symbol</th><th>P/E</th><th>Fwd P/E</th><th>PEG</th><th>P/S</th><th>ROIC TTM</th><th>Revenue Growth (YoY)</th><th>Net Margin</th><th>Mkt Cap</th></tr>${rows}</table>`;
 }
 
-function renderProfile(profile) {
+function renderProfile(profile, credit) {
   const el = document.getElementById('profile-body');
   if (!profile || !profile.sector) {
     el.innerHTML = '<span class="empty-note">No company profile available.</span>';
     return;
   }
+  const creditText = credit ? `${credit.rating}${credit.outlook ? ` (${credit.outlook})` : ''}` : 'n/a';
   el.innerHTML = `
     <div class="stat-row"><span>Sector</span><b>${profile.sector || 'n/a'}</b></div>
     <div class="stat-row"><span>Industry</span><b>${profile.industry || 'n/a'}</b></div>
+    <div class="stat-row"><span>S&amp;P credit rating</span><b title="${credit && credit.source ? `source: ${credit.source}` : ''}">${creditText}</b></div>
     <div class="stat-row"><span>Employees</span><b>${profile.employees != null ? Math.round(profile.employees).toLocaleString() : 'n/a'}</b></div>
     <div class="stat-row"><span>Website</span><b><a href="${profile.website}" target="_blank" rel="noopener">${profile.website || 'n/a'}</a></b></div>
     <div class="stat-row"><span>Address</span><b>${profile.address || 'n/a'}</b></div>
@@ -711,11 +698,7 @@ function renderInsiderTransactions(ownership) {
   el.innerHTML = `<table><tr><th>Filer</th><th>Relation</th><th>Type</th><th>Shares</th><th>Date</th></tr>${insiderRows}</table>`;
 }
 
-// Yahoo's insiderTransactions give a free-text description ("Sale at price
-// 284.32 per share.", "Conversion of Exercise of derivative security...")
-// rather than a clean buy/sell field, so derive a short label from it.
 function insiderTypeInfo(text) {
-  // Empty means Yahoo didn't classify this filing, not that the field doesn't apply.
   if (!text) return { label: 'Unknown', color: '' };
   const lower = text.toLowerCase();
   if (lower.startsWith('sale')) return { label: 'Sell', color: '#ef5350' };
@@ -824,7 +807,7 @@ async function loadCompanyData() {
     renderAnalyst(data.analyst);
     renderPeers(data.peers, currentSymbol);
     renderOwnership(data.ownership);
-    renderProfile(data.profile);
+    renderProfile(data.profile, data.credit);
     renderInsiderTransactions(data.ownership);
     renderFinancials(data.financials, data.balanceSheet, data.cashFlow);
     renderFilings(data.filings);
@@ -837,7 +820,7 @@ document.getElementById('refresh').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   btn.classList.add('spinning');
-  statusEl.textContent = 'Refreshing from Yahoo Finance and OpenInsider…';
+  statusEl.textContent = 'Refreshing from Yahoo Finance, OpenInsider and SEC filings…';
   try {
     const resp = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}`, { method: 'POST' });
     if (!resp.ok) {
@@ -865,7 +848,6 @@ async function switchSymbol(symbol) {
   await loadCompanyData();
 }
 
-// --- Ctrl+K ticker switcher ---------------------------------------------
 
 const paletteOverlayEl = document.getElementById('palette-overlay');
 const paletteInputEl = document.getElementById('palette-input');
@@ -975,7 +957,6 @@ window.addEventListener('keydown', e => {
   }
 });
 
-// --- Shift+wheel ticker cycling ------------------------------------------
 
 const WHEEL_CYCLE_COOLDOWN_MS = 350;
 let lastWheelCycleAt = 0;

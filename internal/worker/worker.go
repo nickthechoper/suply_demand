@@ -1,17 +1,18 @@
-// Package worker runs the background fetch cycle that keeps bars,
-// fundamentals, and company data fresh for every tracked symbol, decoupled
-// from the HTTP request path.
 package worker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
+	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
+	"supplydemand/internal/sec"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
 )
@@ -19,6 +20,8 @@ import (
 const (
 	retryBaseDelay = 5 * time.Minute
 	retryMaxDelay  = 6 * time.Hour
+
+	creditRefreshAge = 7 * 24 * time.Hour
 )
 
 var activity = log.New(io.Discard, "", log.LstdFlags)
@@ -68,13 +71,9 @@ type Config struct {
 	FetchRange string
 	Pacing     time.Duration
 	AfterBars  func(symbol string)
+	SEC        *sec.Client
 }
 
-// BackfillNames fills in company names for tracked symbols from company
-// data already stored locally, without making any network calls. Call it
-// synchronously at startup, before Run, so the dashboard shows known names
-// immediately rather than waiting for the paced background loop to cycle
-// around to each symbol.
 func BackfillNames(st *store.Store, symbols []string) {
 	for _, symbol := range symbols {
 		name, err := st.SymbolName(symbol)
@@ -102,9 +101,6 @@ func BackfillNames(st *store.Store, symbols []string) {
 	}
 }
 
-// nameFromStoredCompanyData returns the company name for symbol pulled out
-// of its already-stored company data, or "" if there's no such data or it
-// doesn't include the name.
 func nameFromStoredCompanyData(st *store.Store, symbol string) (string, error) {
 	companyData, _, ok, err := st.CompanyData(symbol)
 	if err != nil || !ok {
@@ -120,8 +116,6 @@ type task struct {
 	run       func() outcome
 }
 
-// Run keeps refreshing tracked data until ctx is cancelled, always working on
-// whatever was updated longest ago first. Call it in its own goroutine.
 func Run(ctx context.Context, symbols []string, cfg Config) {
 	pending := retries{}
 
@@ -206,6 +200,9 @@ func oldestFirst(cfg Config, client *http.Client, crumb string, symbols []string
 			task{symbol, "company data", ft.CompanyData, func() outcome { return refreshCompanyData(cfg, client, crumb, symbol) }},
 			task{symbol, "insider trades", ft.Insider, func() outcome { return refreshInsiderTrades(cfg, symbol) }},
 		)
+		if cfg.SEC != nil {
+			tasks = append(tasks, task{symbol, "credit rating", ft.Credit, func() outcome { return refreshCreditRating(cfg, symbol) }})
+		}
 	}
 
 	sort.SliceStable(tasks, func(i, j int) bool {
@@ -214,9 +211,6 @@ func oldestFirst(cfg Config, client *http.Client, crumb string, symbols []string
 	return tasks, nil
 }
 
-// sleep waits for d or ctx cancellation, whichever comes first. It reports
-// whether the sleep completed normally (false means ctx was cancelled and
-// the caller should stop).
 func sleep(ctx context.Context, d time.Duration) bool {
 	select {
 	case <-time.After(d):
@@ -317,6 +311,77 @@ func refreshInsiderTrades(cfg Config, symbol string) outcome {
 		return failed
 	}
 	activity.Printf("worker: stored %d insider trades for %s", len(trades), symbol)
+	return fetched
+}
+
+func RefreshCredit(st *store.Store, client *sec.Client, symbol string) bool {
+	return refreshCredit(st, client, symbol, true) != failed
+}
+
+func refreshCreditRating(cfg Config, symbol string) outcome {
+	return refreshCredit(cfg.Store, cfg.SEC, symbol, false)
+}
+
+func refreshCredit(st *store.Store, client *sec.Client, symbol string, force bool) outcome {
+	prev, hadPrev, err := st.CreditRating(symbol)
+	if err != nil {
+		log.Printf("worker: checking stored credit rating for %s: %v", symbol, err)
+		return skipped
+	}
+	if hadPrev && !force && time.Since(prev.FetchedAt) < creditRefreshAge {
+		return skipped
+	}
+
+	filings, err := client.LatestFilings(symbol)
+	if errors.Is(err, sec.ErrNotFound) {
+		if err := st.SetCreditRating(symbol, credit.Rating{}, ""); err != nil {
+			log.Printf("worker: warning: could not store credit rating for %s: %v", symbol, err)
+			return failed
+		}
+		activity.Printf("worker: no SEC filer found for %s, skipping credit rating", symbol)
+		return fetched
+	}
+	if err != nil {
+		log.Printf("worker: warning: could not list SEC filings for %s: %v", symbol, err)
+		return failed
+	}
+
+	accessions := make([]string, len(filings))
+	for i, f := range filings {
+		accessions[i] = f.Accession
+	}
+	key := strings.Join(accessions, ",")
+	if hadPrev && !force && prev.Accession == key {
+		if err := st.SetCreditRating(symbol, prev.Rating, key); err != nil {
+			log.Printf("worker: warning: could not store credit rating for %s: %v", symbol, err)
+			return failed
+		}
+		activity.Printf("worker: credit rating for %s unchanged, no new SEC filings", symbol)
+		return fetched
+	}
+
+	var found credit.Rating
+	for _, filing := range filings {
+		text, err := client.Text(filing)
+		if err != nil {
+			log.Printf("worker: warning: could not fetch %s for %s: %v", filing.Form, symbol, err)
+			return failed
+		}
+		if rating, ok := credit.Extract(text); ok {
+			rating.Form, rating.Filed = filing.Form, filing.Date
+			found = rating
+			break
+		}
+	}
+	if err := st.SetCreditRating(symbol, found, key); err != nil {
+		log.Printf("worker: warning: could not store credit rating for %s: %v", symbol, err)
+		return failed
+	}
+	if found.Rating == "" {
+		activity.Printf("worker: no S&P rating found in latest SEC filings for %s", symbol)
+	} else {
+		activity.Printf("worker: stored S&P rating %s %s for %s from %s", found.Rating, found.Outlook, symbol, found.Origin())
+	}
 	return fetched
 }
 

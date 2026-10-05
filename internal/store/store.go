@@ -1,4 +1,3 @@
-// Package store persists daily OHLCV bars in a local SQLite database.
 package store
 
 import (
@@ -10,6 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/yahoo"
 )
@@ -52,17 +52,12 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("creating fundamentals table: %w", err)
 	}
 
-	// forward_pe_ratio was added after the fundamentals table shipped;
-	// back-fill it on existing databases that predate the column.
 	if _, err := db.Exec(`ALTER TABLE fundamentals ADD COLUMN forward_pe_ratio REAL`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("adding forward_pe_ratio column to fundamentals table: %w", err)
 		}
 	}
 
-	// operating_margin_pct, ps_ratio, and roic_pct were added after the
-	// fundamentals table shipped; back-fill them on existing databases that
-	// predate the columns.
 	for _, col := range []string{"operating_margin_pct", "ps_ratio", "roic_pct"} {
 		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE fundamentals ADD COLUMN %s REAL`, col)); err != nil {
 			if !strings.Contains(err.Error(), "duplicate column name") {
@@ -71,10 +66,6 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
-	// Company data (profile, analyst targets, ownership, financials, filings,
-	// peer comparison) is a deeply nested, list-heavy structure that's only
-	// ever read and replaced wholesale, so it's stored as a JSON blob rather
-	// than normalized across many tables.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS company_data (
 			symbol     TEXT PRIMARY KEY,
@@ -94,8 +85,6 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("creating symbols table: %w", err)
 	}
 
-	// name was added after the symbols table shipped; back-fill it on
-	// existing databases that predate the column.
 	if _, err := db.Exec(`ALTER TABLE symbols ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("adding name column to symbols table: %w", err)
@@ -133,6 +122,20 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("creating demand_alerts table: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS credit_ratings (
+			symbol     TEXT PRIMARY KEY,
+			rating     TEXT NOT NULL,
+			outlook    TEXT NOT NULL,
+			form       TEXT NOT NULL,
+			filed      TEXT NOT NULL,
+			accession  TEXT NOT NULL,
+			fetched_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating credit_ratings table: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -140,7 +143,6 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// UpsertBars inserts or replaces bars for the given symbol.
 func (s *Store) UpsertBars(symbol string, bars []yahoo.Bar) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -176,7 +178,6 @@ func (s *Store) UpsertBars(symbol string, bars []yahoo.Bar) error {
 	return tx.Commit()
 }
 
-// LatestBars returns up to `limit` most recent bars for symbol, ordered oldest to newest.
 func (s *Store) LatestBars(symbol string, limit int) ([]yahoo.Bar, error) {
 	rows, err := s.db.Query(`
 		SELECT ts, open, high, low, close, volume
@@ -204,7 +205,6 @@ func (s *Store) LatestBars(symbol string, limit int) ([]yahoo.Bar, error) {
 		return nil, err
 	}
 
-	// Reverse to oldest-to-newest order.
 	for i, j := 0, len(bars)-1; i < j; i, j = i+1, j-1 {
 		bars[i], bars[j] = bars[j], bars[i]
 	}
@@ -212,7 +212,6 @@ func (s *Store) LatestBars(symbol string, limit int) ([]yahoo.Bar, error) {
 	return bars, nil
 }
 
-// SetFundamentals upserts the fundamentals snapshot for symbol, stamped with the current time.
 func (s *Store) SetFundamentals(symbol string, f yahoo.Fundamentals) error {
 	_, err := s.db.Exec(`
 		INSERT INTO fundamentals (symbol, pe_ratio, forward_pe_ratio, peg_ratio, ps_ratio, revenue_growth_pct, net_margin_pct, operating_margin_pct, roic_pct, fetched_at)
@@ -231,8 +230,6 @@ func (s *Store) SetFundamentals(symbol string, f yahoo.Fundamentals) error {
 	return err
 }
 
-// Fundamentals returns the stored fundamentals snapshot for symbol along with
-// when it was fetched. ok is false if nothing has been stored yet.
 func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt time.Time, ok bool, err error) {
 	var peRatio, forwardPERatio, pegRatio, psRatio, revenueGrowthPct, netMarginPct, operatingMarginPct, roicPct sql.NullFloat64
 	var ts int64
@@ -273,7 +270,6 @@ func (s *Store) Fundamentals(symbol string) (f yahoo.Fundamentals, fetchedAt tim
 	return f, time.Unix(ts, 0).UTC(), true, nil
 }
 
-// SetCompanyData upserts the company data snapshot for symbol, stamped with the current time.
 func (s *Store) SetCompanyData(symbol string, data yahoo.CompanyData) error {
 	blob, err := json.Marshal(data)
 	if err != nil {
@@ -289,8 +285,6 @@ func (s *Store) SetCompanyData(symbol string, data yahoo.CompanyData) error {
 	return err
 }
 
-// CompanyData returns the stored company data snapshot for symbol along with
-// when it was fetched. ok is false if nothing has been stored yet.
 func (s *Store) CompanyData(symbol string) (data yahoo.CompanyData, fetchedAt time.Time, ok bool, err error) {
 	var blob string
 	var ts int64
@@ -338,6 +332,64 @@ func (s *Store) InsiderTrades(symbol string) (trades []openinsider.Trade, fetche
 	return trades, time.Unix(ts, 0).UTC(), true, nil
 }
 
+type CreditRecord struct {
+	credit.Rating
+	Accession string
+	FetchedAt time.Time
+}
+
+func (s *Store) SetCreditRating(symbol string, r credit.Rating, accession string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO credit_ratings (symbol, rating, outlook, form, filed, accession, fetched_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET
+			rating = excluded.rating,
+			outlook = excluded.outlook,
+			form = excluded.form,
+			filed = excluded.filed,
+			accession = excluded.accession,
+			fetched_at = excluded.fetched_at
+	`, symbol, r.Rating, r.Outlook, r.Form, r.Filed, accession, time.Now().Unix())
+	return err
+}
+
+func (s *Store) CreditRating(symbol string) (rec CreditRecord, ok bool, err error) {
+	var ts int64
+	row := s.db.QueryRow(`
+		SELECT rating, outlook, form, filed, accession, fetched_at
+		FROM credit_ratings WHERE symbol = ?
+	`, symbol)
+	if scanErr := row.Scan(&rec.Rating.Rating, &rec.Outlook, &rec.Form, &rec.Filed, &rec.Accession, &ts); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			return rec, false, nil
+		}
+		return rec, false, scanErr
+	}
+	rec.Rank = credit.RankOf(rec.Rating.Rating)
+	rec.FetchedAt = time.Unix(ts, 0).UTC()
+	return rec, true, nil
+}
+
+func (s *Store) CreditRatings() (map[string]credit.Rating, error) {
+	rows, err := s.db.Query(`SELECT symbol, rating, outlook, form, filed FROM credit_ratings WHERE rating != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]credit.Rating{}
+	for rows.Next() {
+		var symbol string
+		var r credit.Rating
+		if err := rows.Scan(&symbol, &r.Rating, &r.Outlook, &r.Form, &r.Filed); err != nil {
+			return nil, err
+		}
+		r.Rank = credit.RankOf(r.Rating)
+		out[symbol] = r
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) DemandAlertSent(symbol string) (bool, error) {
 	var sentAt int64
 	err := s.db.QueryRow(`SELECT sent_at FROM demand_alerts WHERE symbol = ?`, symbol).Scan(&sentAt)
@@ -360,7 +412,6 @@ func (s *Store) ClearDemandAlert(symbol string) error {
 	return err
 }
 
-// UpsertSymbol adds symbol to the tracked list if it isn't already there.
 func (s *Store) UpsertSymbol(symbol string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO symbols (symbol, added_at) VALUES (?, ?)
@@ -369,7 +420,6 @@ func (s *Store) UpsertSymbol(symbol string) error {
 	return err
 }
 
-// ListSymbols returns every tracked symbol, alphabetically.
 func (s *Store) ListSymbols() ([]string, error) {
 	rows, err := s.db.Query(`SELECT symbol FROM symbols ORDER BY symbol`)
 	if err != nil {
@@ -388,16 +438,12 @@ func (s *Store) ListSymbols() ([]string, error) {
 	return symbols, rows.Err()
 }
 
-// SymbolInfo pairs a tracked ticker with its company name, if known.
 type SymbolInfo struct {
 	Symbol string
 	Name   string
 	Note   string
 }
 
-// ListSymbolInfo returns every tracked symbol with its company name,
-// alphabetically by symbol. Name is empty until SetSymbolName has been
-// called for that symbol.
 func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
 	rows, err := s.db.Query(`SELECT symbol, name, note FROM symbols ORDER BY symbol`)
 	if err != nil {
@@ -416,7 +462,6 @@ func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
 	return infos, rows.Err()
 }
 
-// SetSymbolName records the company name for an already-tracked symbol.
 func (s *Store) SetSymbolName(symbol, name string) error {
 	_, err := s.db.Exec(`UPDATE symbols SET name = ? WHERE symbol = ?`, name, symbol)
 	return err
@@ -431,7 +476,6 @@ func (s *Store) SetSymbolNote(symbol, note string) (bool, error) {
 	return n > 0, err
 }
 
-// SymbolName returns the stored company name for symbol, or "" if unknown.
 func (s *Store) SymbolName(symbol string) (string, error) {
 	var name string
 	err := s.db.QueryRow(`SELECT name FROM symbols WHERE symbol = ?`, symbol).Scan(&name)
@@ -448,15 +492,17 @@ type FetchTimes struct {
 	Fundamentals time.Time
 	CompanyData  time.Time
 	Insider      time.Time
+	Credit       time.Time
 }
 
 func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
 	rows, err := s.db.Query(`
-		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0)
+		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0), COALESCE(cr.fetched_at, 0)
 		FROM symbols s
 		LEFT JOIN fundamentals f ON f.symbol = s.symbol
 		LEFT JOIN company_data c ON c.symbol = s.symbol
 		LEFT JOIN insider_trades i ON i.symbol = s.symbol
+		LEFT JOIN credit_ratings cr ON cr.symbol = s.symbol
 		ORDER BY s.symbol
 	`)
 	if err != nil {
@@ -467,14 +513,15 @@ func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
 	var out []FetchTimes
 	for rows.Next() {
 		var ft FetchTimes
-		var bars, fundamentals, companyData, insider int64
-		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider); err != nil {
+		var bars, fundamentals, companyData, insider, creditFetched int64
+		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider, &creditFetched); err != nil {
 			return nil, err
 		}
 		ft.Bars = unixOrZero(bars)
 		ft.Fundamentals = unixOrZero(fundamentals)
 		ft.CompanyData = unixOrZero(companyData)
 		ft.Insider = unixOrZero(insider)
+		ft.Credit = unixOrZero(creditFetched)
 		out = append(out, ft)
 	}
 	return out, rows.Err()

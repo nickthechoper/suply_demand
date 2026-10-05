@@ -145,6 +145,7 @@
   #range-bar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-6);
     border-bottom: 1px solid var(--border);
@@ -222,24 +223,20 @@
   #ohlc-legend .legend-value { margin-right: 10px; }
   #ohlc-legend .legend-change { font-weight: 600; }
   #fundamentals-table {
-    position: absolute;
-    top: 12px;
-    right: 76px;
-    z-index: 6;
     border-collapse: collapse;
     font-size: 11px;
     border: 1px solid rgba(255,255,255,0.3);
     background: rgba(0, 0, 0, 0.7);
+    margin-left: var(--space-2);
   }
   #fundamentals-table th, #fundamentals-table td {
-    padding: 6px 10px;
+    padding: 5px 10px;
     border: 1px solid rgba(255,255,255,0.3);
-    text-align: left;
+    text-align: center;
     white-space: nowrap;
   }
   #fundamentals-table th { background: rgba(120,120,120,0.4); color: #fff; }
-  #fundamentals-table td.metric { color: #fff; }
-  #fundamentals-table td.value { color: #fff; text-align: right; }
+  #fundamentals-table td.value { color: #fff; font-weight: 600; }
   #status { padding: var(--space-3) var(--space-6) var(--space-4); color: var(--muted); font-size: 12px; }
 
   #company-section {
@@ -282,7 +279,6 @@
   .company-card th, .company-card td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   .company-card th:first-child, .company-card td:first-child { text-align: left; white-space: normal; }
   .company-card th { color: var(--muted); font-weight: 600; }
-  .company-card td.highlight { color: var(--supply); font-weight: 600; }
   .company-card tr.highlight-row td { background: rgba(33, 87, 243, 0.1); }
   .company-card .summary-text { font-size: 12px; line-height: 1.6; color: var(--muted); margin-top: var(--space-3); }
   .company-card .empty-note { font-size: 12px; color: var(--muted); font-style: italic; }
@@ -338,6 +334,22 @@
     <button class="range-btn" data-range="1Y"><span>1Y</span><span class="range-pct" data-pct="1Y">–</span></button>
     <button class="range-btn" data-range="2Y"><span>2Y</span><span class="range-pct" data-pct="2Y">–</span></button>
     <button class="range-btn" id="reset-zoom" title="Reset zoom (Alt+R)"><span>Reset Zoom</span></button>
+    <table id="fundamentals-table">
+      <tr>
+        <th>P/E Ratio</th>
+        <th>PEG Ratio</th>
+        <th>Revenue Growth (YoY)</th>
+        <th>Net Profit Margin</th>
+        <th>Operating Margin (TTM)</th>
+      </tr>
+      <tr>
+        <td class="value" id="fund-pe">–</td>
+        <td class="value" id="fund-peg">–</td>
+        <td class="value" id="fund-rev-growth">–</td>
+        <td class="value" id="fund-net-margin">–</td>
+        <td class="value" id="fund-operating-margin">–</td>
+      </tr>
+    </table>
   </div>
 
   <div id="chart-wrap">
@@ -352,14 +364,6 @@
     </div>
     <div id="supply-box" class="zone-box supply"><span class="zone-label">Supply Zone</span></div>
     <div id="demand-box" class="zone-box demand"><span class="zone-label">Demand Zone</span></div>
-    <table id="fundamentals-table">
-      <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td class="metric">P/E Ratio</td><td class="value" id="fund-pe">–</td></tr>
-      <tr><td class="metric">PEG Ratio</td><td class="value" id="fund-peg">–</td></tr>
-      <tr><td class="metric">Revenue Growth (YoY)</td><td class="value" id="fund-rev-growth">–</td></tr>
-      <tr><td class="metric">Net Profit Margin</td><td class="value" id="fund-net-margin">–</td></tr>
-      <tr><td class="metric">Operating Margin (TTM)</td><td class="value" id="fund-operating-margin">–</td></tr>
-    </table>
   </div>
 
   <div id="atr-wrap" class="indicator-wrap">
@@ -390,32 +394,32 @@
   <div id="status"></div>
 
   <div id="company-section">
-    <div class="company-card" id="card-analyst">
+    <div class="company-card">
       <h3>Analyst Target &amp; Rating</h3>
       <div id="analyst-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card wide" id="card-peers">
+    <div class="company-card wide">
       <h3>Peer Comparison</h3>
       <div id="peers-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card wide" id="card-ownership">
+    <div class="company-card wide">
       <h3>Ownership</h3>
       <div id="ownership-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card" id="card-financials">
+    <div class="company-card">
       <h3>Financial Statements</h3>
       <div id="financials-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card double-wide" id="card-insider">
+    <div class="company-card double-wide">
       <h3>Recent Insider Transactions <a id="insider-all-link" href="insider.html" style="float:right;font-size:12px;font-weight:400;">View all (365 days) →</a></h3>
       <div id="insider-body"><span class="empty-note">Loading…</span></div>
     </div>
 
-    <div class="company-card" id="card-filings">
+    <div class="company-card">
       <h3>SEC Filings</h3>
       <div id="filings-body"><span class="empty-note">Loading…</span></div>
     </div>

@@ -12,17 +12,15 @@ type AnalystTarget struct {
 	TargetLow          *float64 `json:"targetLow"`
 	TargetMean         *float64 `json:"targetMean"`
 	TargetMedian       *float64 `json:"targetMedian"`
-	RecommendationMean *float64 `json:"recommendationMean"` // 1 (strong buy) to 5 (strong sell)
-	RecommendationKey  string   `json:"recommendationKey"`  // e.g. "buy"
+	RecommendationMean *float64 `json:"recommendationMean"`
+	RecommendationKey  string   `json:"recommendationKey"`
 	NumAnalysts        *float64 `json:"numAnalysts"`
 }
 
 type Holder struct {
 	Organization string   `json:"organization"`
 	PctHeld      *float64 `json:"pctHeld"`
-	Shares       *float64 `json:"shares"`
 	Value        *float64 `json:"value"`
-	ReportDate   string   `json:"reportDate"`
 }
 
 type InsiderTransaction struct {
@@ -30,15 +28,12 @@ type InsiderTransaction struct {
 	Relation  string   `json:"relation"`
 	Shares    *float64 `json:"shares"`
 	Date      string   `json:"date"`
-	Text      string   `json:"text"` // e.g. "Sale at price 284.32 per share."
+	Text      string   `json:"text"`
 }
 
 type NetInsiderActivity struct {
-	Period               string   `json:"period"`
-	BuyCount             *float64 `json:"buyCount"`
-	SellCount            *float64 `json:"sellCount"`
-	NetShares            *float64 `json:"netShares"`
-	NetInstBuyingPercent *float64 `json:"netInstBuyingPercent"` // institutional net buying, as a fraction
+	Period    string   `json:"period"`
+	NetShares *float64 `json:"netShares"`
 }
 
 type Ownership struct {
@@ -57,10 +52,6 @@ type YearlyFinancials struct {
 	NetIncome    *float64 `json:"netIncome"`
 }
 
-// BalanceSheetSnapshot and CashFlowSnapshot are current-point-in-time values,
-// not historical series: Yahoo's free quoteSummary API no longer populates
-// the detailed line items in balanceSheetHistory/cashflowStatementHistory,
-// so this falls back to the snapshot fields financialData still reports.
 type BalanceSheetSnapshot struct {
 	TotalCash    *float64 `json:"totalCash"`
 	TotalDebt    *float64 `json:"totalDebt"`
@@ -100,9 +91,6 @@ type CompanyData struct {
 	Peers        []PeerQuote          `json:"peers"`
 }
 
-// OwnName finds symbol's own company name among the peer quotes
-// FetchCompanyData bundles in, since Yahoo's quoteSummary API doesn't
-// surface a company name directly.
 func (d CompanyData) OwnName(symbol string) string {
 	for _, p := range d.Peers {
 		if p.Symbol == symbol {
@@ -112,8 +100,6 @@ func (d CompanyData) OwnName(symbol string) string {
 	return ""
 }
 
-// OwnMarketCap finds symbol's own market cap among the peer quotes
-// FetchCompanyData bundles in.
 func (d CompanyData) OwnMarketCap(symbol string) *float64 {
 	for _, p := range d.Peers {
 		if p.Symbol == symbol {
@@ -129,7 +115,7 @@ type companyDataResponse struct {
 			AssetProfile struct {
 				Sector              string   `json:"sector"`
 				Industry            string   `json:"industry"`
-				FullTimeEmployees   *float64 `json:"fullTimeEmployees"` // plain number, unlike most other fields
+				FullTimeEmployees   *float64 `json:"fullTimeEmployees"`
 				Website             string   `json:"website"`
 				Address1            string   `json:"address1"`
 				City                string   `json:"city"`
@@ -173,11 +159,8 @@ type companyDataResponse struct {
 				} `json:"transactions"`
 			} `json:"insiderTransactions"`
 			NetSharePurchaseActivity struct {
-				Period               string            `json:"period"`
-				BuyInfoCount         quoteSummaryFloat `json:"buyInfoCount"`
-				SellInfoCount        quoteSummaryFloat `json:"sellInfoCount"`
-				NetInfoShares        quoteSummaryFloat `json:"netInfoShares"`
-				NetInstBuyingPercent quoteSummaryFloat `json:"netInstBuyingPercent"`
+				Period        string            `json:"period"`
+				NetInfoShares quoteSummaryFloat `json:"netInfoShares"`
 			} `json:"netSharePurchaseActivity"`
 			IncomeStatementHistory struct {
 				IncomeStatementHistory []struct {
@@ -205,14 +188,9 @@ type companyDataResponse struct {
 type ownershipEntry struct {
 	Organization string            `json:"organization"`
 	PctHeld      quoteSummaryFloat `json:"pctHeld"`
-	Position     quoteSummaryFloat `json:"position"`
 	Value        quoteSummaryFloat `json:"value"`
-	ReportDate   quoteSummaryDate  `json:"reportDate"`
 }
 
-// FetchCompanyData retrieves company profile, analyst targets, ownership,
-// available financial history, and SEC filings for symbol, plus a peer P/E
-// comparison against peerSymbols.
 func FetchCompanyData(symbol string, peerSymbols []string) (CompanyData, error) {
 	client, crumb, err := NewAuthedClient()
 	if err != nil {
@@ -221,9 +199,6 @@ func FetchCompanyData(symbol string, peerSymbols []string) (CompanyData, error) 
 	return FetchCompanyDataWithClient(client, crumb, symbol, peerSymbols)
 }
 
-// FetchCompanyDataWithClient is FetchCompanyData against an already-authed
-// client/crumb pair, for callers fetching many symbols in a batch who want
-// to reuse one session instead of re-authenticating per symbol.
 func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string, peerSymbols []string) (CompanyData, error) {
 	modules := "assetProfile,financialData,majorHoldersBreakdown,institutionOwnership,fundOwnership,insiderTransactions,netSharePurchaseActivity,incomeStatementHistory,secFilings"
 	dataURL := fmt.Sprintf(
@@ -291,11 +266,8 @@ func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string
 			InstitutionsPct:   r.MajorHoldersBreakdown.InstitutionsPercentHeld.Raw,
 			InstitutionsCount: r.MajorHoldersBreakdown.InstitutionsCount.Raw,
 			NetInsiderActivity: NetInsiderActivity{
-				Period:               r.NetSharePurchaseActivity.Period,
-				BuyCount:             r.NetSharePurchaseActivity.BuyInfoCount.Raw,
-				SellCount:            r.NetSharePurchaseActivity.SellInfoCount.Raw,
-				NetShares:            r.NetSharePurchaseActivity.NetInfoShares.Raw,
-				NetInstBuyingPercent: r.NetSharePurchaseActivity.NetInstBuyingPercent.Raw,
+				Period:    r.NetSharePurchaseActivity.Period,
+				NetShares: r.NetSharePurchaseActivity.NetInfoShares.Raw,
 			},
 		},
 	}
@@ -304,18 +276,14 @@ func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string
 		data.Ownership.TopInstitutions = append(data.Ownership.TopInstitutions, Holder{
 			Organization: o.Organization,
 			PctHeld:      o.PctHeld.Raw,
-			Shares:       o.Position.Raw,
 			Value:        o.Value.Raw,
-			ReportDate:   o.ReportDate.Fmt,
 		})
 	}
 	for _, o := range r.FundOwnership.OwnershipList {
 		data.Ownership.TopFunds = append(data.Ownership.TopFunds, Holder{
 			Organization: o.Organization,
 			PctHeld:      o.PctHeld.Raw,
-			Shares:       o.Position.Raw,
 			Value:        o.Value.Raw,
-			ReportDate:   o.ReportDate.Fmt,
 		})
 	}
 	for _, t := range r.InsiderTransactions.Transactions {
@@ -345,7 +313,6 @@ func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string
 
 	peers, err := FetchPeerQuotes(client, crumb, symbol, peerSymbols)
 	if err != nil {
-		// Peer comparison is a nice-to-have; don't fail the whole fetch over it.
 		peers = nil
 	} else {
 		enrichPeerFundamentals(client, crumb, peers)
