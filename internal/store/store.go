@@ -9,7 +9,6 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/yahoo"
 )
@@ -120,20 +119,6 @@ func Open(path string) (*Store, error) {
 		)
 	`); err != nil {
 		return nil, fmt.Errorf("creating demand_alerts table: %w", err)
-	}
-
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS credit_ratings (
-			symbol     TEXT PRIMARY KEY,
-			rating     TEXT NOT NULL,
-			outlook    TEXT NOT NULL,
-			form       TEXT NOT NULL,
-			filed      TEXT NOT NULL,
-			accession  TEXT NOT NULL,
-			fetched_at INTEGER NOT NULL
-		)
-	`); err != nil {
-		return nil, fmt.Errorf("creating credit_ratings table: %w", err)
 	}
 
 	return &Store{db: db}, nil
@@ -279,7 +264,11 @@ func (s *Store) SetCompanyData(symbol string, data yahoo.CompanyData) error {
 		INSERT INTO company_data (symbol, data, fetched_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(symbol) DO UPDATE SET
-			data = excluded.data,
+			data = json_patch(excluded.data, json_object(
+				'credit', json_extract(company_data.data, '$.credit'),
+				'creditDiscovery', json_extract(company_data.data, '$.creditDiscovery'),
+				'creditFetch', json_extract(company_data.data, '$.creditFetch')
+			)),
 			fetched_at = excluded.fetched_at
 	`, symbol, string(blob), time.Now().Unix())
 	return err
@@ -330,64 +319,6 @@ func (s *Store) InsiderTrades(symbol string) (trades []openinsider.Trade, fetche
 		return nil, time.Time{}, false, fmt.Errorf("decoding stored insider trades: %w", err)
 	}
 	return trades, time.Unix(ts, 0).UTC(), true, nil
-}
-
-type CreditRecord struct {
-	credit.Rating
-	Accession string
-	FetchedAt time.Time
-}
-
-func (s *Store) SetCreditRating(symbol string, r credit.Rating, accession string) error {
-	_, err := s.db.Exec(`
-		INSERT INTO credit_ratings (symbol, rating, outlook, form, filed, accession, fetched_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(symbol) DO UPDATE SET
-			rating = excluded.rating,
-			outlook = excluded.outlook,
-			form = excluded.form,
-			filed = excluded.filed,
-			accession = excluded.accession,
-			fetched_at = excluded.fetched_at
-	`, symbol, r.Rating, r.Outlook, r.Form, r.Filed, accession, time.Now().Unix())
-	return err
-}
-
-func (s *Store) CreditRating(symbol string) (rec CreditRecord, ok bool, err error) {
-	var ts int64
-	row := s.db.QueryRow(`
-		SELECT rating, outlook, form, filed, accession, fetched_at
-		FROM credit_ratings WHERE symbol = ?
-	`, symbol)
-	if scanErr := row.Scan(&rec.Rating.Rating, &rec.Outlook, &rec.Form, &rec.Filed, &rec.Accession, &ts); scanErr != nil {
-		if scanErr == sql.ErrNoRows {
-			return rec, false, nil
-		}
-		return rec, false, scanErr
-	}
-	rec.Rank = credit.RankOf(rec.Rating.Rating)
-	rec.FetchedAt = time.Unix(ts, 0).UTC()
-	return rec, true, nil
-}
-
-func (s *Store) CreditRatings() (map[string]credit.Rating, error) {
-	rows, err := s.db.Query(`SELECT symbol, rating, outlook, form, filed FROM credit_ratings WHERE rating != ''`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := map[string]credit.Rating{}
-	for rows.Next() {
-		var symbol string
-		var r credit.Rating
-		if err := rows.Scan(&symbol, &r.Rating, &r.Outlook, &r.Form, &r.Filed); err != nil {
-			return nil, err
-		}
-		r.Rank = credit.RankOf(r.Rating)
-		out[symbol] = r
-	}
-	return out, rows.Err()
 }
 
 func (s *Store) DemandAlertSent(symbol string) (bool, error) {
@@ -492,17 +423,15 @@ type FetchTimes struct {
 	Fundamentals time.Time
 	CompanyData  time.Time
 	Insider      time.Time
-	Credit       time.Time
 }
 
 func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
 	rows, err := s.db.Query(`
-		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0), COALESCE(cr.fetched_at, 0)
+		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0)
 		FROM symbols s
 		LEFT JOIN fundamentals f ON f.symbol = s.symbol
 		LEFT JOIN company_data c ON c.symbol = s.symbol
 		LEFT JOIN insider_trades i ON i.symbol = s.symbol
-		LEFT JOIN credit_ratings cr ON cr.symbol = s.symbol
 		ORDER BY s.symbol
 	`)
 	if err != nil {
@@ -513,15 +442,14 @@ func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
 	var out []FetchTimes
 	for rows.Next() {
 		var ft FetchTimes
-		var bars, fundamentals, companyData, insider, creditFetched int64
-		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider, &creditFetched); err != nil {
+		var bars, fundamentals, companyData, insider int64
+		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider); err != nil {
 			return nil, err
 		}
 		ft.Bars = unixOrZero(bars)
 		ft.Fundamentals = unixOrZero(fundamentals)
 		ft.CompanyData = unixOrZero(companyData)
 		ft.Insider = unixOrZero(insider)
-		ft.Credit = unixOrZero(creditFetched)
 		out = append(out, ft)
 	}
 	return out, rows.Err()

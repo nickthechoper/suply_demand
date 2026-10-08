@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+
+	"supplydemand/internal/credit"
 )
 
 type AnalystTarget struct {
@@ -81,14 +83,17 @@ type CompanyProfile struct {
 }
 
 type CompanyData struct {
-	Profile      CompanyProfile       `json:"profile"`
-	Analyst      AnalystTarget        `json:"analyst"`
-	Ownership    Ownership            `json:"ownership"`
-	Financials   []YearlyFinancials   `json:"financials"`
-	BalanceSheet BalanceSheetSnapshot `json:"balanceSheet"`
-	CashFlow     CashFlowSnapshot     `json:"cashFlow"`
-	Filings      []SecFiling          `json:"filings"`
-	Peers        []PeerQuote          `json:"peers"`
+	Credit          *credit.SPData       `json:"credit,omitempty"`
+	CreditDiscovery *credit.Discovery    `json:"creditDiscovery,omitempty"`
+	CreditFetch     *credit.FetchState   `json:"creditFetch,omitempty"`
+	Profile         CompanyProfile       `json:"profile"`
+	Analyst         AnalystTarget        `json:"analyst"`
+	Ownership       Ownership            `json:"ownership"`
+	Financials      []YearlyFinancials   `json:"financials"`
+	BalanceSheet    BalanceSheetSnapshot `json:"balanceSheet"`
+	CashFlow        CashFlowSnapshot     `json:"cashFlow"`
+	Filings         []SecFiling          `json:"filings"`
+	Peers           []PeerQuote          `json:"peers"`
 }
 
 func (d CompanyData) OwnName(symbol string) string {

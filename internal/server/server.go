@@ -16,9 +16,7 @@ import (
 	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/score"
-	"supplydemand/internal/sec"
 	"supplydemand/internal/store"
-	"supplydemand/internal/worker"
 	"supplydemand/internal/yahoo"
 	"supplydemand/internal/zones"
 )
@@ -33,7 +31,6 @@ type Config struct {
 	Peers        map[string][]string
 	DeepDemand   float64
 	Credit       *credit.Source
-	SEC          *sec.Client
 }
 
 type Server struct {
@@ -185,6 +182,9 @@ func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
 	}{CompanyData: data}
 	if rating, ok := s.creditRatings()[symbol]; ok {
 		resp.Credit = &creditDTO{Rating: rating.Rating, Outlook: rating.Outlook, Source: rating.Origin()}
+		if data.Credit != nil && rating.Source == "S&P Global" {
+			resp.Credit.Details = data.Credit
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -194,16 +194,20 @@ func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
 }
 
 type creditDTO struct {
-	Rating  string `json:"rating"`
-	Outlook string `json:"outlook"`
-	Source  string `json:"source"`
+	Rating  string         `json:"rating"`
+	Outlook string         `json:"outlook"`
+	Source  string         `json:"source"`
+	Details *credit.SPData `json:"details,omitempty"`
 }
 
 func (s *Server) creditRatings() map[string]credit.Rating {
-	merged, err := s.store.CreditRatings()
-	if err != nil {
-		log.Printf("loading stored credit ratings: %v", err)
-		merged = map[string]credit.Rating{}
+	merged := map[string]credit.Rating{}
+	if direct, err := s.store.SPCreditRatings(); err != nil {
+		log.Printf("loading S&P issuer ratings: %v", err)
+	} else {
+		for symbol, rating := range direct {
+			merged[symbol] = rating
+		}
 	}
 	if s.config.Credit != nil {
 		for symbol, rating := range s.config.Credit.Snapshot() {
@@ -343,11 +347,6 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		insiderTradesFetched = false
 	}
 
-	creditRatingFetched := false
-	if s.config.SEC != nil {
-		creditRatingFetched = worker.RefreshCredit(s.store, s.config.SEC, symbol)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"symbol":               symbol,
@@ -355,7 +354,6 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		"fundamentalsFetched":  fundamentalsFetched,
 		"companyDataFetched":   companyDataFetched,
 		"insiderTradesFetched": insiderTradesFetched,
-		"creditRatingFetched":  creditRatingFetched,
 	})
 }
 

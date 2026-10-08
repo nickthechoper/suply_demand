@@ -6,3 +6,6 @@
 .idea
 /data/*.log
 /config/mail.json
+/tools/sp-ratings/node_modules/
+/tools/sp-ratings/output/
+/tools/sp-ratings/.auth/

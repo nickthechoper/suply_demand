@@ -18,8 +18,8 @@ import (
 	"supplydemand/internal/alert"
 	"supplydemand/internal/credit"
 	"supplydemand/internal/mail"
-	"supplydemand/internal/sec"
 	"supplydemand/internal/server"
+	"supplydemand/internal/spglobal"
 	"supplydemand/internal/store"
 	"supplydemand/internal/worker"
 	"supplydemand/internal/zones"
@@ -55,8 +55,7 @@ func main() {
 	smtpUser := flag.String("alert-smtp-user", "", "SMTP username; the password comes from ALERT_SMTP_PASSWORD or the mail config")
 	mailConfigPath := flag.String("mail-config", "config/mail.json", "JSON file with SMTP user, pass, host and port; flags and ALERT_SMTP_PASSWORD override it")
 	creditPath := flag.String("credit-ratings", "config/credit_ratings.csv", "CSV file with Symbol, Rating and Outlook columns holding S&P issuer credit ratings; edits are picked up without a restart")
-	secUserAgent := flag.String("sec-user-agent", "", "identity sent to SEC EDGAR, e.g. \"Your Name you@example.com\"; overrides SEC_USER_AGENT and the SEC config file")
-	secConfigPath := flag.String("sec-config", "config/sec.json", "JSON file with the userAgent identity sent to SEC EDGAR; enables reading S&P credit ratings from 10-K and 10-Q filings")
+	spConfigPath := flag.String("sp-config", "config/spglobal.json", "S&P browser refresh and entity discovery configuration")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Dir(*logPath), 0o755); err != nil {
@@ -152,20 +151,17 @@ func main() {
 		log.Printf("demand zone email alerts enabled for %s", *alertTo)
 	}
 
-	secFileAgent, err := sec.LoadUserAgent(*secConfigPath)
-	if err != nil {
-		log.Fatalf("loading SEC config: %v", err)
-	}
-	var secClient *sec.Client
-	if agent := firstNonEmpty(*secUserAgent, os.Getenv("SEC_USER_AGENT"), secFileAgent); agent != "" {
-		secClient = sec.NewClient(agent)
-		log.Printf("reading S&P credit ratings from SEC filings")
-	} else {
-		log.Printf("credit ratings from SEC filings are off: set userAgent in %s, pass -sec-user-agent, or set SEC_USER_AGENT", *secConfigPath)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	spClient, err := spglobal.Load(*spConfigPath)
+	if err != nil {
+		log.Fatalf("loading S&P config: %v", err)
+	}
+	spDone := make(chan struct{})
+	go func() {
+		defer close(spDone)
+		worker.RunSPCredit(ctx, st, spClient)
+	}()
 
 	workerDone := make(chan struct{})
 	go func() {
@@ -176,7 +172,6 @@ func main() {
 			FetchRange: *fetchRange,
 			Pacing:     *fetchPacing,
 			AfterBars:  afterBars,
-			SEC:        secClient,
 		})
 	}()
 
@@ -190,7 +185,6 @@ func main() {
 		Peers:        defaultPeers,
 		DeepDemand:   *alertDepth,
 		Credit:       credit.NewSource(*creditPath),
-		SEC:          secClient,
 	})
 
 	httpServer := &http.Server{
@@ -223,6 +217,11 @@ func main() {
 	case <-workerDone:
 	case <-shutdownCtx.Done():
 		log.Printf("worker did not stop before shutdown timeout")
+	}
+	select {
+	case <-spDone:
+	case <-shutdownCtx.Done():
+		log.Printf("S&P worker did not stop before shutdown timeout")
 	}
 }
 
