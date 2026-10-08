@@ -607,6 +607,9 @@ function renderAnalyst(analyst) {
   }
 
   const currentPrice = barsAscending.length ? barsAscending[barsAscending.length - 1].close : null;
+  const ratingLabel = analyst.recommendationKey
+    ? analyst.recommendationKey.replace(/_/g, ' ').toUpperCase()
+    : 'n/a';
 
   let rangeHtml = '';
   if (analyst.targetLow != null && analyst.targetHigh != null && analyst.targetHigh > analyst.targetLow) {
@@ -624,6 +627,7 @@ function renderAnalyst(analyst) {
   }
 
   el.innerHTML = `
+    <div class="stat-row"><span>Rating</span><b>${ratingLabel}${analyst.recommendationMean != null ? ` (${fmt(analyst.recommendationMean)})` : ''}</b></div>
     <div class="stat-row"><span>Analysts</span><b>${analyst.numAnalysts != null ? Math.round(analyst.numAnalysts) : 'n/a'}</b></div>
     <div class="stat-row"><span>Target Mean</span><b>${fmt(analyst.targetMean)}</b></div>
     <div class="stat-row"><span>Target Median</span><b>${fmt(analyst.targetMedian)}</b></div>
