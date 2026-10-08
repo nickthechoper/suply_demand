@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "node": "node",
+  "script": "tools/sp-ratings/batch.cjs",
+  "session": "tools/sp-ratings/.auth/session.json",
+  "channel": "chrome",
+  "headed": true,
+  "refreshInterval": "24h",
+  "discoveryInterval": "168h",
+  "timeout": "30s",
+  "pacing": "2s",
+  "batchSize": 25,
+  "batchInterval": "5m",
+  "blockedPause": "1h",
+  "entities": {
+    "GRAB": "https://www.spglobal.com/ratings/en/regulatory/org-details/sectorCode/CORP/entityId/682461"
+  }
+}

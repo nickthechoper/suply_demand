@@ -664,7 +664,7 @@ function renderProfile(profile, credit) {
     el.innerHTML = '<span class="empty-note">No company profile available.</span>';
     return;
   }
-  const creditText = credit ? `${credit.rating}${credit.outlook ? ` (${credit.outlook})` : ''}` : 'n/a';
+  const creditText = !credit ? 'n/a' : credit.rating ? `${credit.rating}${credit.outlook ? ` (${credit.outlook})` : ''}` : 'Not rated';
   el.innerHTML = `
     <div class="stat-row"><span>Sector</span><b>${profile.sector || 'n/a'}</b></div>
     <div class="stat-row"><span>Industry</span><b>${profile.industry || 'n/a'}</b></div>
@@ -820,7 +820,7 @@ document.getElementById('refresh').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   btn.classList.add('spinning');
-  statusEl.textContent = 'Refreshing from Yahoo Finance, OpenInsider and SEC filings…';
+  statusEl.textContent = 'Refreshing from Yahoo Finance and OpenInsider…';
   try {
     const resp = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}`, { method: 'POST' });
     if (!resp.ok) {

@@ -17,19 +17,14 @@ type Rating struct {
 	Rating  string
 	Outlook string
 	Rank    int
-	Form    string
-	Filed   string
+	Source  string
 }
 
 func (r Rating) Origin() string {
-	switch {
-	case r.Form == "":
-		return "manual"
-	case r.Filed == "":
-		return r.Form
-	default:
-		return r.Form + " filed " + r.Filed
+	if r.Source != "" {
+		return r.Source
 	}
+	return "manual"
 }
 
 func RankOf(rating string) int {

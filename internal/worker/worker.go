@@ -2,17 +2,13 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
-	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
-	"supplydemand/internal/sec"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
 )
@@ -20,8 +16,6 @@ import (
 const (
 	retryBaseDelay = 5 * time.Minute
 	retryMaxDelay  = 6 * time.Hour
-
-	creditRefreshAge = 7 * 24 * time.Hour
 )
 
 var activity = log.New(io.Discard, "", log.LstdFlags)
@@ -56,13 +50,20 @@ func (r retries) succeed(key string) {
 func (r retries) fail(key string, now time.Time) (int, time.Duration) {
 	b := r[key]
 	b.failures++
-	delay := retryMaxDelay
-	if b.failures <= 8 {
-		delay = min(retryBaseDelay<<(b.failures-1), retryMaxDelay)
-	}
+	delay := retryDelay(b.failures)
 	b.retryAt = now.Add(delay)
 	r[key] = b
 	return b.failures, delay
+}
+
+func retryDelay(failures int) time.Duration {
+	if failures <= 1 {
+		return retryBaseDelay
+	}
+	if failures > 8 {
+		return retryMaxDelay
+	}
+	return min(retryBaseDelay<<(failures-1), retryMaxDelay)
 }
 
 type Config struct {
@@ -71,7 +72,6 @@ type Config struct {
 	FetchRange string
 	Pacing     time.Duration
 	AfterBars  func(symbol string)
-	SEC        *sec.Client
 }
 
 func BackfillNames(st *store.Store, symbols []string) {
@@ -200,9 +200,6 @@ func oldestFirst(cfg Config, client *http.Client, crumb string, symbols []string
 			task{symbol, "company data", ft.CompanyData, func() outcome { return refreshCompanyData(cfg, client, crumb, symbol) }},
 			task{symbol, "insider trades", ft.Insider, func() outcome { return refreshInsiderTrades(cfg, symbol) }},
 		)
-		if cfg.SEC != nil {
-			tasks = append(tasks, task{symbol, "credit rating", ft.Credit, func() outcome { return refreshCreditRating(cfg, symbol) }})
-		}
 	}
 
 	sort.SliceStable(tasks, func(i, j int) bool {
@@ -311,77 +308,6 @@ func refreshInsiderTrades(cfg Config, symbol string) outcome {
 		return failed
 	}
 	activity.Printf("worker: stored %d insider trades for %s", len(trades), symbol)
-	return fetched
-}
-
-func RefreshCredit(st *store.Store, client *sec.Client, symbol string) bool {
-	return refreshCredit(st, client, symbol, true) != failed
-}
-
-func refreshCreditRating(cfg Config, symbol string) outcome {
-	return refreshCredit(cfg.Store, cfg.SEC, symbol, false)
-}
-
-func refreshCredit(st *store.Store, client *sec.Client, symbol string, force bool) outcome {
-	prev, hadPrev, err := st.CreditRating(symbol)
-	if err != nil {
-		log.Printf("worker: checking stored credit rating for %s: %v", symbol, err)
-		return skipped
-	}
-	if hadPrev && !force && time.Since(prev.FetchedAt) < creditRefreshAge {
-		return skipped
-	}
-
-	filings, err := client.LatestFilings(symbol)
-	if errors.Is(err, sec.ErrNotFound) {
-		if err := st.SetCreditRating(symbol, credit.Rating{}, ""); err != nil {
-			log.Printf("worker: warning: could not store credit rating for %s: %v", symbol, err)
-			return failed
-		}
-		activity.Printf("worker: no SEC filer found for %s, skipping credit rating", symbol)
-		return fetched
-	}
-	if err != nil {
-		log.Printf("worker: warning: could not list SEC filings for %s: %v", symbol, err)
-		return failed
-	}
-
-	accessions := make([]string, len(filings))
-	for i, f := range filings {
-		accessions[i] = f.Accession
-	}
-	key := strings.Join(accessions, ",")
-	if hadPrev && !force && prev.Accession == key {
-		if err := st.SetCreditRating(symbol, prev.Rating, key); err != nil {
-			log.Printf("worker: warning: could not store credit rating for %s: %v", symbol, err)
-			return failed
-		}
-		activity.Printf("worker: credit rating for %s unchanged, no new SEC filings", symbol)
-		return fetched
-	}
-
-	var found credit.Rating
-	for _, filing := range filings {
-		text, err := client.Text(filing)
-		if err != nil {
-			log.Printf("worker: warning: could not fetch %s for %s: %v", filing.Form, symbol, err)
-			return failed
-		}
-		if rating, ok := credit.Extract(text); ok {
-			rating.Form, rating.Filed = filing.Form, filing.Date
-			found = rating
-			break
-		}
-	}
-	if err := st.SetCreditRating(symbol, found, key); err != nil {
-		log.Printf("worker: warning: could not store credit rating for %s: %v", symbol, err)
-		return failed
-	}
-	if found.Rating == "" {
-		activity.Printf("worker: no S&P rating found in latest SEC filings for %s", symbol)
-	} else {
-		activity.Printf("worker: stored S&P rating %s %s for %s from %s", found.Rating, found.Outlook, symbol, found.Origin())
-	}
 	return fetched
 }
 

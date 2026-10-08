@@ -1,0 +1,15 @@
+{
+  "name": "sp-ratings-fetcher",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "fetch": "node fetch.cjs",
+    "test": "node --test fetch.test.cjs"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
