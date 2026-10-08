@@ -607,9 +607,6 @@ function renderAnalyst(analyst) {
   }
 
   const currentPrice = barsAscending.length ? barsAscending[barsAscending.length - 1].close : null;
-  const ratingLabel = analyst.recommendationKey
-    ? analyst.recommendationKey.replace(/_/g, ' ').toUpperCase()
-    : 'n/a';
 
   let rangeHtml = '';
   if (analyst.targetLow != null && analyst.targetHigh != null && analyst.targetHigh > analyst.targetLow) {
@@ -627,7 +624,6 @@ function renderAnalyst(analyst) {
   }
 
   el.innerHTML = `
-    <div class="stat-row"><span>Rating</span><b>${ratingLabel}${analyst.recommendationMean != null ? ` (${fmt(analyst.recommendationMean)})` : ''}</b></div>
     <div class="stat-row"><span>Analysts</span><b>${analyst.numAnalysts != null ? Math.round(analyst.numAnalysts) : 'n/a'}</b></div>
     <div class="stat-row"><span>Target Mean</span><b>${fmt(analyst.targetMean)}</b></div>
     <div class="stat-row"><span>Target Median</span><b>${fmt(analyst.targetMedian)}</b></div>
@@ -658,17 +654,15 @@ function renderPeers(peers, symbol) {
   el.innerHTML = `<table><tr><th>Symbol</th><th>P/E</th><th>Fwd P/E</th><th>PEG</th><th>P/S</th><th>ROIC TTM</th><th>Revenue Growth (YoY)</th><th>Net Margin</th><th>Mkt Cap</th></tr>${rows}</table>`;
 }
 
-function renderProfile(profile, credit) {
+function renderProfile(profile) {
   const el = document.getElementById('profile-body');
   if (!profile || !profile.sector) {
     el.innerHTML = '<span class="empty-note">No company profile available.</span>';
     return;
   }
-  const creditText = !credit ? 'n/a' : credit.rating ? `${credit.rating}${credit.outlook ? ` (${credit.outlook})` : ''}` : 'Not rated';
   el.innerHTML = `
     <div class="stat-row"><span>Sector</span><b>${profile.sector || 'n/a'}</b></div>
     <div class="stat-row"><span>Industry</span><b>${profile.industry || 'n/a'}</b></div>
-    <div class="stat-row"><span>S&amp;P credit rating</span><b title="${credit && credit.source ? `source: ${credit.source}` : ''}">${creditText}</b></div>
     <div class="stat-row"><span>Employees</span><b>${profile.employees != null ? Math.round(profile.employees).toLocaleString() : 'n/a'}</b></div>
     <div class="stat-row"><span>Website</span><b><a href="${profile.website}" target="_blank" rel="noopener">${profile.website || 'n/a'}</a></b></div>
     <div class="stat-row"><span>Address</span><b>${profile.address || 'n/a'}</b></div>
@@ -807,7 +801,7 @@ async function loadCompanyData() {
     renderAnalyst(data.analyst);
     renderPeers(data.peers, currentSymbol);
     renderOwnership(data.ownership);
-    renderProfile(data.profile, data.credit);
+    renderProfile(data.profile);
     renderInsiderTransactions(data.ownership);
     renderFinancials(data.financials, data.balanceSheet, data.cashFlow);
     renderFilings(data.filings);

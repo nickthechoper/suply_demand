@@ -5,18 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-
-	"supplydemand/internal/credit"
+	"time"
 )
 
 type AnalystTarget struct {
-	TargetHigh         *float64 `json:"targetHigh"`
-	TargetLow          *float64 `json:"targetLow"`
-	TargetMean         *float64 `json:"targetMean"`
-	TargetMedian       *float64 `json:"targetMedian"`
-	RecommendationMean *float64 `json:"recommendationMean"`
-	RecommendationKey  string   `json:"recommendationKey"`
-	NumAnalysts        *float64 `json:"numAnalysts"`
+	TargetHigh   *float64 `json:"targetHigh"`
+	TargetLow    *float64 `json:"targetLow"`
+	TargetMean   *float64 `json:"targetMean"`
+	TargetMedian *float64 `json:"targetMedian"`
+	NumAnalysts  *float64 `json:"numAnalysts"`
 }
 
 type Holder struct {
@@ -66,6 +63,12 @@ type CashFlowSnapshot struct {
 	FreeCashflow      *float64 `json:"freeCashflow"`
 }
 
+type TTMStatement struct {
+	Revenue         *float64 `json:"revenue"`
+	EBIT            *float64 `json:"ebit"`
+	InterestExpense *float64 `json:"interestExpense"`
+}
+
 type SecFiling struct {
 	Date  string `json:"date"`
 	Type  string `json:"type"`
@@ -83,17 +86,15 @@ type CompanyProfile struct {
 }
 
 type CompanyData struct {
-	Credit          *credit.SPData       `json:"credit,omitempty"`
-	CreditDiscovery *credit.Discovery    `json:"creditDiscovery,omitempty"`
-	CreditFetch     *credit.FetchState   `json:"creditFetch,omitempty"`
-	Profile         CompanyProfile       `json:"profile"`
-	Analyst         AnalystTarget        `json:"analyst"`
-	Ownership       Ownership            `json:"ownership"`
-	Financials      []YearlyFinancials   `json:"financials"`
-	BalanceSheet    BalanceSheetSnapshot `json:"balanceSheet"`
-	CashFlow        CashFlowSnapshot     `json:"cashFlow"`
-	Filings         []SecFiling          `json:"filings"`
-	Peers           []PeerQuote          `json:"peers"`
+	Profile      CompanyProfile       `json:"profile"`
+	Analyst      AnalystTarget        `json:"analyst"`
+	Ownership    Ownership            `json:"ownership"`
+	Financials   []YearlyFinancials   `json:"financials"`
+	BalanceSheet BalanceSheetSnapshot `json:"balanceSheet"`
+	CashFlow     CashFlowSnapshot     `json:"cashFlow"`
+	TTM          TTMStatement         `json:"ttm"`
+	Filings      []SecFiling          `json:"filings"`
+	Peers        []PeerQuote          `json:"peers"`
 }
 
 func (d CompanyData) OwnName(symbol string) string {
@@ -133,8 +134,6 @@ type companyDataResponse struct {
 				TargetLowPrice          quoteSummaryFloat `json:"targetLowPrice"`
 				TargetMeanPrice         quoteSummaryFloat `json:"targetMeanPrice"`
 				TargetMedianPrice       quoteSummaryFloat `json:"targetMedianPrice"`
-				RecommendationMean      quoteSummaryFloat `json:"recommendationMean"`
-				RecommendationKey       string            `json:"recommendationKey"`
 				NumberOfAnalystOpinions quoteSummaryFloat `json:"numberOfAnalystOpinions"`
 				TotalCash               quoteSummaryFloat `json:"totalCash"`
 				TotalDebt               quoteSummaryFloat `json:"totalDebt"`
@@ -196,6 +195,64 @@ type ownershipEntry struct {
 	Value        quoteSummaryFloat `json:"value"`
 }
 
+type ttmStatementResponse struct {
+	Timeseries struct {
+		Result []map[string]json.RawMessage `json:"result"`
+		Error  *struct {
+			Description string `json:"description"`
+		} `json:"error"`
+	} `json:"timeseries"`
+}
+
+func fetchTTMStatement(client *http.Client, crumb string, symbol string) (TTMStatement, error) {
+	period2 := time.Now().Unix()
+	period1 := time.Now().AddDate(-2, 0, 0).Unix()
+	dataURL := fmt.Sprintf(
+		"https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/%s?type=trailingTotalRevenue,trailingEBIT,trailingInterestExpense&period1=%d&period2=%d&crumb=%s",
+		symbol, period1, period2, url.QueryEscape(crumb),
+	)
+	body, err := get(client, dataURL)
+	if err != nil {
+		return TTMStatement{}, fmt.Errorf("fetching yahoo TTM statement: %w", err)
+	}
+
+	var parsed ttmStatementResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return TTMStatement{}, fmt.Errorf("decoding yahoo TTM statement response: %w", err)
+	}
+	if parsed.Timeseries.Error != nil {
+		return TTMStatement{}, fmt.Errorf("yahoo timeseries api error: %s", parsed.Timeseries.Error.Description)
+	}
+
+	latest := func(key string) *float64 {
+		var out *float64
+		for _, result := range parsed.Timeseries.Result {
+			raw, ok := result[key]
+			if !ok {
+				continue
+			}
+			var points []struct {
+				ReportedValue quoteSummaryFloat `json:"reportedValue"`
+			}
+			if json.Unmarshal(raw, &points) != nil {
+				continue
+			}
+			for _, p := range points {
+				if p.ReportedValue.Raw != nil {
+					out = p.ReportedValue.Raw
+				}
+			}
+		}
+		return out
+	}
+
+	return TTMStatement{
+		Revenue:         latest("trailingTotalRevenue"),
+		EBIT:            latest("trailingEBIT"),
+		InterestExpense: latest("trailingInterestExpense"),
+	}, nil
+}
+
 func FetchCompanyData(symbol string, peerSymbols []string) (CompanyData, error) {
 	client, crumb, err := NewAuthedClient()
 	if err != nil {
@@ -248,13 +305,11 @@ func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string
 			Summary:   r.AssetProfile.LongBusinessSummary,
 		},
 		Analyst: AnalystTarget{
-			TargetHigh:         r.FinancialData.TargetHighPrice.Raw,
-			TargetLow:          r.FinancialData.TargetLowPrice.Raw,
-			TargetMean:         r.FinancialData.TargetMeanPrice.Raw,
-			TargetMedian:       r.FinancialData.TargetMedianPrice.Raw,
-			RecommendationMean: r.FinancialData.RecommendationMean.Raw,
-			RecommendationKey:  r.FinancialData.RecommendationKey,
-			NumAnalysts:        r.FinancialData.NumberOfAnalystOpinions.Raw,
+			TargetHigh:   r.FinancialData.TargetHighPrice.Raw,
+			TargetLow:    r.FinancialData.TargetLowPrice.Raw,
+			TargetMean:   r.FinancialData.TargetMeanPrice.Raw,
+			TargetMedian: r.FinancialData.TargetMedianPrice.Raw,
+			NumAnalysts:  r.FinancialData.NumberOfAnalystOpinions.Raw,
 		},
 		BalanceSheet: BalanceSheetSnapshot{
 			TotalCash:    r.FinancialData.TotalCash.Raw,
@@ -314,6 +369,10 @@ func FetchCompanyDataWithClient(client *http.Client, crumb string, symbol string
 			Title: f.Title,
 			URL:   f.EdgarURL,
 		})
+	}
+
+	if ttm, err := fetchTTMStatement(client, crumb, symbol); err == nil {
+		data.TTM = ttm
 	}
 
 	peers, err := FetchPeerQuotes(client, crumb, symbol, peerSymbols)
