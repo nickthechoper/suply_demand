@@ -264,11 +264,7 @@ func (s *Store) SetCompanyData(symbol string, data yahoo.CompanyData) error {
 		INSERT INTO company_data (symbol, data, fetched_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(symbol) DO UPDATE SET
-			data = json_patch(excluded.data, json_object(
-				'credit', json_extract(company_data.data, '$.credit'),
-				'creditDiscovery', json_extract(company_data.data, '$.creditDiscovery'),
-				'creditFetch', json_extract(company_data.data, '$.creditFetch')
-			)),
+			data = excluded.data,
 			fetched_at = excluded.fetched_at
 	`, symbol, string(blob), time.Now().Unix())
 	return err

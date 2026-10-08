@@ -46,11 +46,6 @@ function zonePill(zone) {
   return `<span class="zone-pill ${zone}">${label}</span>`;
 }
 
-function ratingLabel(key) {
-  if (!key) return '–';
-  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
 function scoreBreakdown(row) {
   return (row.scoreBreakdown || [])
     .map(c => `${c.name} (${c.weight}%): ${c.score === null || c.score === undefined ? 'no data' : Math.round(c.score)}`)
@@ -65,12 +60,11 @@ function scorePill(row) {
   return `<span class="score-pill ${bucket}" title="${breakdown}">${Math.round(score)}</span>`;
 }
 
-function creditPill(row) {
-  if (!row.credit) return '–';
-  const rank = row.creditRank;
-  const bucket = rank === null || rank === undefined ? 'credit-unranked' : rank >= 16 ? 'credit-high' : rank >= 13 ? 'credit-mid' : 'credit-low';
-  const title = [row.creditOutlook ? `S&P outlook: ${row.creditOutlook}` : 'S&P credit rating', row.creditSource ? `source: ${row.creditSource}` : ''].filter(Boolean).join(' · ');
-  return `<span class="credit-pill ${bucket}" title="${escapeHtml(title)}">${escapeHtml(row.credit)}</span>`;
+function resiliencePill(row) {
+  const v = row.resilience;
+  if (v === null || v === undefined) return '–';
+  const bucket = v >= 65 ? 'score-high' : v <= 35 ? 'score-low' : 'score-mid';
+  return `<span class="score-pill ${bucket}">${Math.round(v)}</span>`;
 }
 
 function flagBadges(row) {
@@ -146,7 +140,7 @@ function matchesFilter(row) {
   if (sectorFilter !== 'all' && row.sector !== sectorFilter) return false;
   if (!query) return true;
   const q = query.toLowerCase();
-  return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry, row.credit].some(v => (v || '').toLowerCase().includes(q));
+  return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry].some(v => (v || '').toLowerCase().includes(q));
 }
 
 function sortRows(list) {
@@ -174,7 +168,6 @@ function render() {
       <td class="sector">${escapeHtml(r.sector) || '–'}</td>
       <td class="industry">${escapeHtml(r.industry) || '–'}</td>
       <td>${fmt(r.price)}</td>
-      <td class="${r.changePct >= 0 ? 'pos' : 'neg'}">${r.changePct >= 0 ? '+' : ''}${fmt(r.changePct)}%</td>
       <td>${zonePill(r.zone)}</td>
       <td>${fmt(r.pegRatio)}</td>
       <td class="${pctClass(r.roicPct)}">${fmtPct(r.roicPct)}</td>
@@ -182,8 +175,7 @@ function render() {
       <td>${fmt(r.peRatio)}</td>
       <td class="${pctClass(r.revenueGrowthPct)}">${fmtPct(r.revenueGrowthPct)}</td>
       <td class="${pctClass(r.netMarginPct)}">${fmtPct(r.netMarginPct)}</td>
-      <td>${creditPill(r)}</td>
-      <td>${ratingLabel(r.recommendationKey)}</td>
+      <td>${resiliencePill(r)}</td>
       <td class="${r.upsidePct >= 0 ? 'pos' : 'neg'}">${r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%`}</td>
       <td class="${r.netOpenMarket ? pctClass(r.netOpenMarket) : ''}"><a class="cell-link" href="insider.html?symbol=${encodeURIComponent(r.symbol)}">${fmtNetUsd(r.netOpenMarket)}</a></td>
       <td>${scorePill(r)}</td>

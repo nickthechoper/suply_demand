@@ -16,10 +16,8 @@ import (
 	"time"
 
 	"supplydemand/internal/alert"
-	"supplydemand/internal/credit"
 	"supplydemand/internal/mail"
 	"supplydemand/internal/server"
-	"supplydemand/internal/spglobal"
 	"supplydemand/internal/store"
 	"supplydemand/internal/worker"
 	"supplydemand/internal/zones"
@@ -54,8 +52,6 @@ func main() {
 	smtpPort := flag.String("alert-smtp-port", "", "SMTP server port (465 uses implicit TLS, anything else uses STARTTLS when offered); defaults to the mail config, then 587")
 	smtpUser := flag.String("alert-smtp-user", "", "SMTP username; the password comes from ALERT_SMTP_PASSWORD or the mail config")
 	mailConfigPath := flag.String("mail-config", "config/mail.json", "JSON file with SMTP user, pass, host and port; flags and ALERT_SMTP_PASSWORD override it")
-	creditPath := flag.String("credit-ratings", "config/credit_ratings.csv", "CSV file with Symbol, Rating and Outlook columns holding S&P issuer credit ratings; edits are picked up without a restart")
-	spConfigPath := flag.String("sp-config", "config/spglobal.json", "S&P browser refresh and entity discovery configuration")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Dir(*logPath), 0o755); err != nil {
@@ -153,15 +149,6 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	spClient, err := spglobal.Load(*spConfigPath)
-	if err != nil {
-		log.Fatalf("loading S&P config: %v", err)
-	}
-	spDone := make(chan struct{})
-	go func() {
-		defer close(spDone)
-		worker.RunSPCredit(ctx, st, spClient)
-	}()
 
 	workerDone := make(chan struct{})
 	go func() {
@@ -184,7 +171,6 @@ func main() {
 		WebDir:       *webDir,
 		Peers:        defaultPeers,
 		DeepDemand:   *alertDepth,
-		Credit:       credit.NewSource(*creditPath),
 	})
 
 	httpServer := &http.Server{
@@ -217,11 +203,6 @@ func main() {
 	case <-workerDone:
 	case <-shutdownCtx.Done():
 		log.Printf("worker did not stop before shutdown timeout")
-	}
-	select {
-	case <-spDone:
-	case <-shutdownCtx.Done():
-		log.Printf("S&P worker did not stop before shutdown timeout")
 	}
 }
 

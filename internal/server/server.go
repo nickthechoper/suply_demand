@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"supplydemand/internal/category"
-	"supplydemand/internal/credit"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/score"
 	"supplydemand/internal/store"
@@ -30,7 +29,6 @@ type Config struct {
 	WebDir       string
 	Peers        map[string][]string
 	DeepDemand   float64
-	Credit       *credit.Source
 }
 
 type Server struct {
@@ -176,45 +174,10 @@ func (s *Server) handleCompany(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := struct {
-		yahoo.CompanyData
-		Credit *creditDTO `json:"credit"`
-	}{CompanyData: data}
-	if rating, ok := s.creditRatings()[symbol]; ok {
-		resp.Credit = &creditDTO{Rating: rating.Rating, Outlook: rating.Outlook, Source: rating.Origin()}
-		if data.Credit != nil && rating.Source == "S&P Global" {
-			resp.Credit.Details = data.Credit
-		}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("encoding /api/company response: %v", err)
 	}
-}
-
-type creditDTO struct {
-	Rating  string         `json:"rating"`
-	Outlook string         `json:"outlook"`
-	Source  string         `json:"source"`
-	Details *credit.SPData `json:"details,omitempty"`
-}
-
-func (s *Server) creditRatings() map[string]credit.Rating {
-	merged := map[string]credit.Rating{}
-	if direct, err := s.store.SPCreditRatings(); err != nil {
-		log.Printf("loading S&P issuer ratings: %v", err)
-	} else {
-		for symbol, rating := range direct {
-			merged[symbol] = rating
-		}
-	}
-	if s.config.Credit != nil {
-		for symbol, rating := range s.config.Credit.Snapshot() {
-			merged[symbol] = rating
-		}
-	}
-	return merged
 }
 
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
@@ -358,35 +321,29 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type screenerRowDTO struct {
-	Symbol             string            `json:"symbol"`
-	Name               string            `json:"name"`
-	Price              float64           `json:"price"`
-	ChangePct          float64           `json:"changePct"`
-	Zone               string            `json:"zone"`
-	DeepDemand         bool              `json:"deepDemand"`
-	PEGRatio           *float64          `json:"pegRatio"`
-	ROICPct            *float64          `json:"roicPct"`
-	PSRatio            *float64          `json:"psRatio"`
-	PERatio            *float64          `json:"peRatio"`
-	RevenueGrowthPct   *float64          `json:"revenueGrowthPct"`
-	NetMarginPct       *float64          `json:"netMarginPct"`
-	Score              float64           `json:"score"`
-	Qualified          bool              `json:"qualified"`
-	ScoreBreakdown     []score.Component `json:"scoreBreakdown"`
-	RecommendationMean *float64          `json:"recommendationMean"`
-	RecommendationKey  string            `json:"recommendationKey"`
-	TargetMean         *float64          `json:"targetMean"`
-	UpsidePct          *float64          `json:"upsidePct"`
-	Flags              []string          `json:"flags"`
-	NetOpenMarket      *float64          `json:"netOpenMarket"`
-	Note               string            `json:"note"`
-	Sector             string            `json:"sector"`
-	Industry           string            `json:"industry"`
-	AITheme            string            `json:"aiTheme"`
-	Credit             string            `json:"credit"`
-	CreditOutlook      string            `json:"creditOutlook"`
-	CreditSource       string            `json:"creditSource"`
-	CreditRank         *int              `json:"creditRank"`
+	Symbol           string            `json:"symbol"`
+	Name             string            `json:"name"`
+	Price            float64           `json:"price"`
+	Zone             string            `json:"zone"`
+	DeepDemand       bool              `json:"deepDemand"`
+	PEGRatio         *float64          `json:"pegRatio"`
+	ROICPct          *float64          `json:"roicPct"`
+	PSRatio          *float64          `json:"psRatio"`
+	PERatio          *float64          `json:"peRatio"`
+	RevenueGrowthPct *float64          `json:"revenueGrowthPct"`
+	NetMarginPct     *float64          `json:"netMarginPct"`
+	Score            float64           `json:"score"`
+	Resilience       *float64          `json:"resilience"`
+	Qualified        bool              `json:"qualified"`
+	ScoreBreakdown   []score.Component `json:"scoreBreakdown"`
+	TargetMean       *float64          `json:"targetMean"`
+	UpsidePct        *float64          `json:"upsidePct"`
+	Flags            []string          `json:"flags"`
+	NetOpenMarket    *float64          `json:"netOpenMarket"`
+	Note             string            `json:"note"`
+	Sector           string            `json:"sector"`
+	Industry         string            `json:"industry"`
+	AITheme          string            `json:"aiTheme"`
 }
 
 func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +353,6 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	creditRatings := s.creditRatings()
 	rows := make([]screenerRowDTO, 0, len(infos))
 	for _, info := range infos {
 		bars, err := s.store.LatestBars(info.Symbol, s.config.Lookback)
@@ -427,11 +383,8 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var recommendationMean, targetMean *float64
-		var recommendationKey string
+		var targetMean *float64
 		if ok {
-			recommendationMean = companyData.Analyst.RecommendationMean
-			recommendationKey = companyData.Analyst.RecommendationKey
 			targetMean = companyData.Analyst.TargetMean
 		}
 
@@ -469,6 +422,24 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		var revenue, operatingCashflow, totalCash, totalDebt, ebit, interestExpense *float64
+		if ok {
+			operatingCashflow = companyData.CashFlow.OperatingCashflow
+			totalCash = companyData.BalanceSheet.TotalCash
+			totalDebt = companyData.BalanceSheet.TotalDebt
+			interestExpense = companyData.TTM.InterestExpense
+
+			revenue = companyData.TTM.Revenue
+			if revenue == nil && len(companyData.Financials) > 0 {
+				revenue = companyData.Financials[0].TotalRevenue
+			}
+			ebit = companyData.TTM.EBIT
+			if ebit == nil && revenue != nil && fundamentals.OperatingMarginPct != nil {
+				v := *revenue * *fundamentals.OperatingMarginPct / 100
+				ebit = &v
+			}
+		}
+
 		var netOpenMarket *float64
 		if trades, _, ok, err := s.store.InsiderTrades(info.Symbol); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -478,17 +449,9 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			netOpenMarket = &net
 		}
 
-		rating, hasRating := creditRatings[info.Symbol]
-		var creditRank *float64
-		if hasRating && rating.Rank > 0 {
-			rank := float64(rating.Rank)
-			creditRank = &rank
-		}
-
 		scoreResult := score.Compute(score.Input{
 			Price:                 last.Close,
 			ZonePosition:          zonePosition,
-			RecommendationMean:    recommendationMean,
 			TargetMean:            targetMean,
 			NumAnalysts:           numAnalysts,
 			PERatio:               fundamentals.PERatio,
@@ -505,51 +468,44 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			NetDebtToMarketCapPct: netDebtToMarketCapPct,
 			CurrentRatio:          currentRatio,
 			NetInsiderOpenMarket:  netOpenMarket,
-			CreditRank:            creditRank,
+			Revenue:               revenue,
+			OperatingCashflow:     operatingCashflow,
+			TotalCash:             totalCash,
+			TotalDebt:             totalDebt,
+			EBIT:                  ebit,
+			InterestExpense:       interestExpense,
 		})
 
 		row := screenerRowDTO{
-			Symbol:             info.Symbol,
-			Name:               info.Name,
-			Price:              last.Close,
-			Zone:               zone,
-			DeepDemand:         deepDemand,
-			PEGRatio:           fundamentals.PEGRatio,
-			ROICPct:            fundamentals.ROICPct,
-			PSRatio:            fundamentals.PSRatio,
-			PERatio:            fundamentals.PERatio,
-			RevenueGrowthPct:   fundamentals.RevenueGrowthPct,
-			NetMarginPct:       fundamentals.NetMarginPct,
-			Score:              scoreResult.Total,
-			Qualified:          scoreResult.Qualified,
-			ScoreBreakdown:     scoreResult.Components,
-			RecommendationMean: recommendationMean,
-			RecommendationKey:  recommendationKey,
-			TargetMean:         targetMean,
-			UpsidePct:          scoreResult.UpsidePct,
-			Flags:              scoreResult.Flags,
-			NetOpenMarket:      netOpenMarket,
-			Note:               info.Note,
-			AITheme:            category.Theme(info.Symbol),
+			Symbol:           info.Symbol,
+			Name:             info.Name,
+			Price:            last.Close,
+			Zone:             zone,
+			DeepDemand:       deepDemand,
+			PEGRatio:         fundamentals.PEGRatio,
+			ROICPct:          fundamentals.ROICPct,
+			PSRatio:          fundamentals.PSRatio,
+			PERatio:          fundamentals.PERatio,
+			RevenueGrowthPct: fundamentals.RevenueGrowthPct,
+			NetMarginPct:     fundamentals.NetMarginPct,
+			Score:            scoreResult.Total,
+			Qualified:        scoreResult.Qualified,
+			ScoreBreakdown:   scoreResult.Components,
+			TargetMean:       targetMean,
+			UpsidePct:        scoreResult.UpsidePct,
+			Flags:            scoreResult.Flags,
+			NetOpenMarket:    netOpenMarket,
+			Note:             info.Note,
+			AITheme:          category.Theme(info.Symbol),
+		}
+		for _, c := range scoreResult.Components {
+			if c.Name == "Resilience" {
+				row.Resilience = c.Score
+			}
 		}
 		if ok {
 			row.Sector = companyData.Profile.Sector
 			row.Industry = companyData.Profile.Industry
-		}
-		if hasRating {
-			row.Credit = rating.Rating
-			row.CreditOutlook = rating.Outlook
-			row.CreditSource = rating.Origin()
-			if rating.Rank > 0 {
-				rank := rating.Rank
-				row.CreditRank = &rank
-			}
-		}
-		if len(bars) > 1 {
-			prev := bars[len(bars)-2]
-			if prev.Close != 0 {
-				row.ChangePct = (last.Close - prev.Close) / prev.Close * 100
-			}
 		}
 
 		rows = append(rows, row)

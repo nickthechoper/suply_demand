@@ -1,9 +1,10 @@
 package score
 
+import "math"
+
 type Input struct {
 	Price                 float64
 	ZonePosition          *float64
-	RecommendationMean    *float64
 	TargetMean            *float64
 	NumAnalysts           *float64
 	PERatio               *float64
@@ -20,7 +21,12 @@ type Input struct {
 	NetDebtToMarketCapPct *float64
 	CurrentRatio          *float64
 	NetInsiderOpenMarket  *float64
-	CreditRank            *float64
+	Revenue               *float64
+	OperatingCashflow     *float64
+	TotalCash             *float64
+	TotalDebt             *float64
+	EBIT                  *float64
+	InterestExpense       *float64
 }
 
 type Component struct {
@@ -64,21 +70,25 @@ var (
 	currentRatioCurve    = curve{{0.5, 0}, {1, 50}, {1.5, 80}, {2, 100}}
 	revenueGrowthCurve   = curve{{-20, 0}, {0, 30}, {10, 60}, {25, 85}, {50, 100}}
 	earningsGrowthCurve  = curve{{-50, 0}, {0, 35}, {15, 65}, {40, 90}, {100, 100}}
-	ratingCurve          = curve{{1.5, 100}, {2, 75}, {2.5, 50}, {3, 25}, {3.5, 0}}
 	upsideCurve          = curve{{-20, 0}, {0, 30}, {15, 65}, {30, 90}, {50, 100}}
 	zoneCurve            = curve{{0, 100}, {1, 0}}
 	insiderBpsCurve      = curve{{-50, 30}, {-5, 45}, {0, 50}, {1, 70}, {10, 100}}
-	creditCurve          = curve{{1, 0}, {7, 5}, {10, 20}, {13, 50}, {16, 75}, {19, 92}, {22, 100}}
 )
 
 const (
-	weightValuation = 21
-	weightQuality   = 21
-	weightGrowth    = 13
-	weightAnalyst   = 13
-	weightZone      = 13
-	weightInsider   = 4
-	weightCredit    = 15
+	weightValuation  = 22
+	weightQuality    = 22
+	weightGrowth     = 14
+	weightAnalyst    = 12
+	weightZone       = 13
+	weightInsider    = 4
+	weightResilience = 13
+
+	frsFCFWeight       = 0.30
+	frsLiquidityWeight = 0.25
+	frsInterestWeight  = 0.20
+	frsCapexWeight     = 0.15
+	frsMinWeight       = 0.5
 
 	minCoverage = 0.6
 )
@@ -148,7 +158,6 @@ func Compute(in Input) Result {
 	}
 
 	var analyst bucket
-	analyst.add(in.RecommendationMean, ratingCurve)
 	analyst.add(upsidePct, upsideCurve)
 	analystScore := analyst.mean()
 	if analystScore != nil {
@@ -169,9 +178,6 @@ func Compute(in Input) Result {
 		insider.add(&bps, insiderBpsCurve)
 	}
 
-	var creditBucket bucket
-	creditBucket.add(in.CreditRank, creditCurve)
-
 	components := []Component{
 		{Name: "Valuation", Weight: weightValuation, Score: valuation.mean()},
 		{Name: "Quality", Weight: weightQuality, Score: quality.mean()},
@@ -179,14 +185,11 @@ func Compute(in Input) Result {
 		{Name: "Analyst", Weight: weightAnalyst, Score: analystScore},
 		{Name: "Zone", Weight: weightZone, Score: zone.mean()},
 		{Name: "Insider", Weight: weightInsider, Score: insider.mean()},
-		{Name: "Credit", Weight: weightCredit, Score: creditBucket.mean()},
+		{Name: "Resilience", Weight: weightResilience, Score: resilience(in)},
 	}
 
 	var weighted, covered, total float64
 	for _, c := range components {
-		if c.Name == "Credit" && c.Score == nil {
-			continue
-		}
 		total += c.Weight
 		if c.Score != nil {
 			weighted += *c.Score * c.Weight
@@ -205,6 +208,60 @@ func Compute(in Input) Result {
 	result.Qualified = true
 	result.Total = weighted / covered
 	return result
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func resilience(in Input) *float64 {
+	var weighted, weights float64
+	add := func(weight, v float64) {
+		weighted += weight * clamp01(v)
+		weights += weight
+	}
+
+	if in.FreeCashflow != nil && in.Revenue != nil && *in.Revenue > 0 {
+		add(frsFCFWeight, (*in.FreeCashflow / *in.Revenue + 0.10)/0.30)
+	}
+
+	if in.TotalCash != nil && in.TotalDebt != nil {
+		if *in.TotalDebt > 0 {
+			add(frsLiquidityWeight, *in.TotalCash / *in.TotalDebt / 2)
+		} else {
+			add(frsLiquidityWeight, 1)
+		}
+	}
+
+	if in.EBIT != nil {
+		switch {
+		case in.InterestExpense != nil && *in.InterestExpense != 0:
+			add(frsInterestWeight, *in.EBIT/math.Abs(*in.InterestExpense)/8)
+		case in.TotalDebt != nil && *in.TotalDebt == 0:
+			add(frsInterestWeight, 1)
+		}
+	}
+
+	if in.OperatingCashflow != nil && in.FreeCashflow != nil {
+		if *in.OperatingCashflow > 0 {
+			capex := *in.OperatingCashflow - *in.FreeCashflow
+			add(frsCapexWeight, 1 - capex / *in.OperatingCashflow)
+		} else {
+			add(frsCapexWeight, 0)
+		}
+	}
+
+	if weights < frsMinWeight {
+		return nil
+	}
+	v := weighted / weights * 100
+	return &v
 }
 
 func earningsMultipleScore(in Input) *float64 {

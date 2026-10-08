@@ -6,13 +6,13 @@ func f(v float64) *float64 { return &v }
 
 func baseInput() Input {
 	return Input{
-		Price:              100,
-		PERatio:            f(15),
-		ROICPct:            f(15),
-		NetMarginPct:       f(15),
-		RevenueGrowthPct:   f(10),
-		RecommendationMean: f(2),
-		NumAnalysts:        f(20),
+		Price:            100,
+		PERatio:          f(15),
+		ROICPct:          f(15),
+		NetMarginPct:     f(15),
+		RevenueGrowthPct: f(10),
+		TargetMean:       f(120),
+		NumAnalysts:      f(20),
 	}
 }
 
@@ -33,34 +33,51 @@ func TestWeightsSumToOneHundred(t *testing.T) {
 	if sum != 100 {
 		t.Fatalf("weights sum to %v, want 100", sum)
 	}
-	if w := component(Compute(baseInput()), "Credit").Weight; w != 15 {
-		t.Fatalf("credit weight = %v, want 15", w)
+}
+
+func resilienceInput() Input {
+	in := baseInput()
+	in.Revenue = f(1000)
+	in.FreeCashflow = f(200)
+	in.OperatingCashflow = f(250)
+	in.TotalCash = f(400)
+	in.TotalDebt = f(200)
+	in.EBIT = f(160)
+	in.InterestExpense = f(10)
+	return in
+}
+
+func TestResilienceMatchesFormulaWithoutAltman(t *testing.T) {
+	s := component(Compute(resilienceInput()), "Resilience").Score
+	if s == nil {
+		t.Fatal("expected a resilience score")
+	}
+	want := 100 * (0.30*1 + 0.25*1 + 0.20*1 + 0.15*0.8) / 0.90
+	if d := *s - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("resilience = %v, want %v", *s, want)
 	}
 }
 
-func TestCreditRaisesAndLowersScore(t *testing.T) {
-	without := Compute(baseInput())
+func TestResilienceDropsWithWeakBalanceSheet(t *testing.T) {
+	weak := resilienceInput()
+	weak.FreeCashflow = f(-100)
+	weak.OperatingCashflow = f(50)
+	weak.TotalCash = f(10)
+	weak.TotalDebt = f(900)
+	weak.EBIT = f(5)
 
-	strong := baseInput()
-	strong.CreditRank = f(22)
-	weak := baseInput()
-	weak.CreditRank = f(8)
-
-	high, low := Compute(strong), Compute(weak)
-	if !(high.Total > without.Total && without.Total > low.Total) {
-		t.Fatalf("expected AAA > no credit > B, got %v, %v, %v", high.Total, without.Total, low.Total)
-	}
-	if s := component(high, "Credit").Score; s == nil || *s != 100 {
-		t.Fatalf("AAA credit score = %v, want 100", s)
+	strong := component(Compute(resilienceInput()), "Resilience").Score
+	low := component(Compute(weak), "Resilience").Score
+	if strong == nil || low == nil || *low >= *strong {
+		t.Fatalf("expected weak < strong, got %v, %v", low, strong)
 	}
 }
 
-func TestMissingCreditDoesNotBlockQualification(t *testing.T) {
-	r := Compute(baseInput())
-	if !r.Qualified {
-		t.Fatalf("expected qualified without credit, components: %+v", r.Components)
-	}
-	if component(r, "Credit").Score != nil {
-		t.Fatal("credit score should be nil when no rating is known")
+func TestResilienceNeedsEnoughInputs(t *testing.T) {
+	in := baseInput()
+	in.TotalCash = f(100)
+	in.TotalDebt = f(0)
+	if component(Compute(in), "Resilience").Score != nil {
+		t.Fatal("resilience should be nil with only the liquidity input")
 	}
 }
