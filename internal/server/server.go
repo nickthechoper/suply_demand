@@ -14,7 +14,6 @@ import (
 
 	"supplydemand/internal/category"
 	"supplydemand/internal/openinsider"
-	"supplydemand/internal/score"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
 	"supplydemand/internal/zones"
@@ -321,29 +320,64 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type screenerRowDTO struct {
-	Symbol           string            `json:"symbol"`
-	Name             string            `json:"name"`
-	Price            float64           `json:"price"`
-	Zone             string            `json:"zone"`
-	DeepDemand       bool              `json:"deepDemand"`
-	PEGRatio         *float64          `json:"pegRatio"`
-	ROICPct          *float64          `json:"roicPct"`
-	PSRatio          *float64          `json:"psRatio"`
-	PERatio          *float64          `json:"peRatio"`
-	RevenueGrowthPct *float64          `json:"revenueGrowthPct"`
-	NetMarginPct     *float64          `json:"netMarginPct"`
-	Score            float64           `json:"score"`
-	Resilience       *float64          `json:"resilience"`
-	Qualified        bool              `json:"qualified"`
-	ScoreBreakdown   []score.Component `json:"scoreBreakdown"`
-	TargetMean       *float64          `json:"targetMean"`
-	UpsidePct        *float64          `json:"upsidePct"`
-	Flags            []string          `json:"flags"`
-	NetOpenMarket    *float64          `json:"netOpenMarket"`
-	Note             string            `json:"note"`
-	Sector           string            `json:"sector"`
-	Industry         string            `json:"industry"`
-	AITheme          string            `json:"aiTheme"`
+	Symbol             string   `json:"symbol"`
+	Name               string   `json:"name"`
+	Price              float64  `json:"price"`
+	Zone               string   `json:"zone"`
+	DeepDemand         bool     `json:"deepDemand"`
+	PEGRatio           *float64 `json:"pegRatio"`
+	ROICPct            *float64 `json:"roicPct"`
+	PSRatio            *float64 `json:"psRatio"`
+	PERatio            *float64 `json:"peRatio"`
+	RevenueGrowthPct   *float64 `json:"revenueGrowthPct"`
+	NetMarginPct       *float64 `json:"netMarginPct"`
+	RecommendationMean *float64 `json:"recommendationMean"`
+	RecommendationKey  string   `json:"recommendationKey"`
+	TargetMean         *float64 `json:"targetMean"`
+	UpsidePct          *float64 `json:"upsidePct"`
+	Flags              []string `json:"flags"`
+	NetOpenMarket      *float64 `json:"netOpenMarket"`
+	Note               string   `json:"note"`
+	Sector             string   `json:"sector"`
+	Industry           string   `json:"industry"`
+	AITheme            string   `json:"aiTheme"`
+}
+
+type flagInput struct {
+	NumAnalysts           *float64
+	PERatio               *float64
+	RevenueGrowthPct      *float64
+	EarningsGrowthPct     *float64
+	NetMarginPct          *float64
+	FreeCashflow          *float64
+	NetDebtToMarketCapPct *float64
+	CurrentRatio          *float64
+}
+
+func flags(in flagInput) []string {
+	var out []string
+	if in.NetMarginPct != nil && *in.NetMarginPct < 0 {
+		out = append(out, "Unprofitable")
+	}
+	if in.FreeCashflow != nil && *in.FreeCashflow < 0 {
+		out = append(out, "Negative free cash flow")
+	}
+	if in.NetDebtToMarketCapPct != nil && *in.NetDebtToMarketCapPct > 50 {
+		out = append(out, "Heavy net debt load")
+	}
+	if in.CurrentRatio != nil && *in.CurrentRatio < 1 {
+		out = append(out, "Weak liquidity")
+	}
+	if in.EarningsGrowthPct != nil && in.RevenueGrowthPct != nil && *in.EarningsGrowthPct < *in.RevenueGrowthPct-20 {
+		out = append(out, "Earnings growth lagging revenue")
+	}
+	if in.NumAnalysts != nil && *in.NumAnalysts < 3 {
+		out = append(out, "Thin analyst coverage")
+	}
+	if in.PERatio != nil && *in.PERatio > 0 && *in.PERatio < 5 {
+		out = append(out, "Possible value trap")
+	}
+	return out
 }
 
 func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
@@ -383,8 +417,11 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var targetMean *float64
+		var recommendationMean, targetMean *float64
+		var recommendationKey string
 		if ok {
+			recommendationMean = companyData.Analyst.RecommendationMean
+			recommendationKey = companyData.Analyst.RecommendationKey
 			targetMean = companyData.Analyst.TargetMean
 		}
 
@@ -394,15 +431,9 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var zonePosition *float64
-		if result.SupplyReached && result.DemandReached && result.SupplyAvg > result.DemandAvg {
-			pos := (last.Close - result.DemandAvg) / (result.SupplyAvg - result.DemandAvg)
-			zonePosition = &pos
-		}
-
-		var marketCap, numAnalysts, freeCashflow, netDebtToMarketCapPct, currentRatio, earningsGrowthPct *float64
+		var numAnalysts, freeCashflow, netDebtToMarketCapPct, currentRatio, earningsGrowthPct *float64
 		if ok {
-			marketCap = companyData.OwnMarketCap(info.Symbol)
+			marketCap := companyData.OwnMarketCap(info.Symbol)
 			numAnalysts = companyData.Analyst.NumAnalysts
 			freeCashflow = companyData.CashFlow.FreeCashflow
 			currentRatio = companyData.BalanceSheet.CurrentRatio
@@ -422,22 +453,10 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		var revenue, operatingCashflow, totalCash, totalDebt, ebit, interestExpense *float64
-		if ok {
-			operatingCashflow = companyData.CashFlow.OperatingCashflow
-			totalCash = companyData.BalanceSheet.TotalCash
-			totalDebt = companyData.BalanceSheet.TotalDebt
-			interestExpense = companyData.TTM.InterestExpense
-
-			revenue = companyData.TTM.Revenue
-			if revenue == nil && len(companyData.Financials) > 0 {
-				revenue = companyData.Financials[0].TotalRevenue
-			}
-			ebit = companyData.TTM.EBIT
-			if ebit == nil && revenue != nil && fundamentals.OperatingMarginPct != nil {
-				v := *revenue * *fundamentals.OperatingMarginPct / 100
-				ebit = &v
-			}
+		var upsidePct *float64
+		if targetMean != nil && *targetMean > 0 && last.Close > 0 {
+			v := (*targetMean - last.Close) / last.Close * 100
+			upsidePct = &v
 		}
 
 		var netOpenMarket *float64
@@ -449,59 +468,35 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			netOpenMarket = &net
 		}
 
-		scoreResult := score.Compute(score.Input{
-			Price:                 last.Close,
-			ZonePosition:          zonePosition,
-			TargetMean:            targetMean,
-			NumAnalysts:           numAnalysts,
-			PERatio:               fundamentals.PERatio,
-			ForwardPERatio:        fundamentals.ForwardPERatio,
-			PEGRatio:              fundamentals.PEGRatio,
-			PSRatio:               fundamentals.PSRatio,
-			RevenueGrowthPct:      fundamentals.RevenueGrowthPct,
-			EarningsGrowthPct:     earningsGrowthPct,
-			NetMarginPct:          fundamentals.NetMarginPct,
-			OperatingMarginPct:    fundamentals.OperatingMarginPct,
-			ROICPct:               fundamentals.ROICPct,
-			MarketCap:             marketCap,
-			FreeCashflow:          freeCashflow,
-			NetDebtToMarketCapPct: netDebtToMarketCapPct,
-			CurrentRatio:          currentRatio,
-			NetInsiderOpenMarket:  netOpenMarket,
-			Revenue:               revenue,
-			OperatingCashflow:     operatingCashflow,
-			TotalCash:             totalCash,
-			TotalDebt:             totalDebt,
-			EBIT:                  ebit,
-			InterestExpense:       interestExpense,
-		})
-
 		row := screenerRowDTO{
-			Symbol:           info.Symbol,
-			Name:             info.Name,
-			Price:            last.Close,
-			Zone:             zone,
-			DeepDemand:       deepDemand,
-			PEGRatio:         fundamentals.PEGRatio,
-			ROICPct:          fundamentals.ROICPct,
-			PSRatio:          fundamentals.PSRatio,
-			PERatio:          fundamentals.PERatio,
-			RevenueGrowthPct: fundamentals.RevenueGrowthPct,
-			NetMarginPct:     fundamentals.NetMarginPct,
-			Score:            scoreResult.Total,
-			Qualified:        scoreResult.Qualified,
-			ScoreBreakdown:   scoreResult.Components,
-			TargetMean:       targetMean,
-			UpsidePct:        scoreResult.UpsidePct,
-			Flags:            scoreResult.Flags,
-			NetOpenMarket:    netOpenMarket,
-			Note:             info.Note,
-			AITheme:          category.Theme(info.Symbol),
-		}
-		for _, c := range scoreResult.Components {
-			if c.Name == "Resilience" {
-				row.Resilience = c.Score
-			}
+			Symbol:             info.Symbol,
+			Name:               info.Name,
+			Price:              last.Close,
+			Zone:               zone,
+			DeepDemand:         deepDemand,
+			PEGRatio:           fundamentals.PEGRatio,
+			ROICPct:            fundamentals.ROICPct,
+			PSRatio:            fundamentals.PSRatio,
+			PERatio:            fundamentals.PERatio,
+			RevenueGrowthPct:   fundamentals.RevenueGrowthPct,
+			NetMarginPct:       fundamentals.NetMarginPct,
+			RecommendationMean: recommendationMean,
+			RecommendationKey:  recommendationKey,
+			TargetMean:         targetMean,
+			UpsidePct:          upsidePct,
+			Flags: flags(flagInput{
+				NumAnalysts:           numAnalysts,
+				PERatio:               fundamentals.PERatio,
+				RevenueGrowthPct:      fundamentals.RevenueGrowthPct,
+				EarningsGrowthPct:     earningsGrowthPct,
+				NetMarginPct:          fundamentals.NetMarginPct,
+				FreeCashflow:          freeCashflow,
+				NetDebtToMarketCapPct: netDebtToMarketCapPct,
+				CurrentRatio:          currentRatio,
+			}),
+			NetOpenMarket: netOpenMarket,
+			Note:          info.Note,
+			AITheme:       category.Theme(info.Symbol),
 		}
 		if ok {
 			row.Sector = companyData.Profile.Sector

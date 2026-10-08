@@ -46,25 +46,9 @@ function zonePill(zone) {
   return `<span class="zone-pill ${zone}">${label}</span>`;
 }
 
-function scoreBreakdown(row) {
-  return (row.scoreBreakdown || [])
-    .map(c => `${c.name} (${c.weight}%): ${c.score === null || c.score === undefined ? 'no data' : Math.round(c.score)}`)
-    .join('\n');
-}
-
-function scorePill(row) {
-  const breakdown = escapeHtml(scoreBreakdown(row));
-  if (!row.qualified) return `<span class="score-pill score-na" title="Not enough data: valuation and quality are required, plus 60% of total weight\n\n${breakdown}">N/A</span>`;
-  const score = row.score;
-  const bucket = score >= 65 ? 'score-high' : score <= 35 ? 'score-low' : 'score-mid';
-  return `<span class="score-pill ${bucket}" title="${breakdown}">${Math.round(score)}</span>`;
-}
-
-function resiliencePill(row) {
-  const v = row.resilience;
-  if (v === null || v === undefined) return '–';
-  const bucket = v >= 65 ? 'score-high' : v <= 35 ? 'score-low' : 'score-mid';
-  return `<span class="score-pill ${bucket}">${Math.round(v)}</span>`;
+function ratingLabel(key) {
+  if (!key) return '–';
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function flagBadges(row) {
@@ -175,10 +159,9 @@ function render() {
       <td>${fmt(r.peRatio)}</td>
       <td class="${pctClass(r.revenueGrowthPct)}">${fmtPct(r.revenueGrowthPct)}</td>
       <td class="${pctClass(r.netMarginPct)}">${fmtPct(r.netMarginPct)}</td>
-      <td>${resiliencePill(r)}</td>
+      <td>${ratingLabel(r.recommendationKey)}</td>
       <td class="${r.upsidePct >= 0 ? 'pos' : 'neg'}">${r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%`}</td>
       <td class="${r.netOpenMarket ? pctClass(r.netOpenMarket) : ''}"><a class="cell-link" href="insider.html?symbol=${encodeURIComponent(r.symbol)}">${fmtNetUsd(r.netOpenMarket)}</a></td>
-      <td>${scorePill(r)}</td>
       <td>${flagBadges(r)}</td>
       <td class="note-cell">${noteCell(r)}</td>
     </tr>
@@ -275,8 +258,6 @@ async function init() {
   fillFilterOptions(themeFilterEl, (data.aiThemes || []).filter(t => rows.some(r => r.aiTheme === t)));
   fillFilterOptions(sectorFilterEl, [...new Set(rows.map(r => r.sector).filter(Boolean))].sort());
   themeFilterEl.querySelector('[value="ai"]').textContent = `All AI (${count('aiTheme')})`;
-  sortKey = 'score';
-  sortDir = -1;
   render();
 }
 
