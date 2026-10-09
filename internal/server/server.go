@@ -86,6 +86,7 @@ type dataResponse struct {
 	LookbackBars int             `json:"lookbackBars"`
 	Zones        zonesDTO        `json:"zones"`
 	Fundamentals fundamentalsDTO `json:"fundamentals"`
+	AITheme      string          `json:"aiTheme"`
 }
 
 func (s *Server) Routes() http.Handler {
@@ -230,6 +231,7 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		Symbol:       symbol,
 		Bars:         barDTOs,
 		LookbackBars: min(len(bars), s.config.Lookback),
+		AITheme:      category.Theme(symbol),
 		Fundamentals: fundamentalsDTO{
 			PERatio:            fundamentals.PERatio,
 			ForwardPERatio:     fundamentals.ForwardPERatio,
