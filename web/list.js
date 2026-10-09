@@ -1,4 +1,5 @@
 const tableWrapEl = document.getElementById('table-wrap');
+const headRowEl = document.getElementById('head-row');
 const tableBodyEl = document.getElementById('table-body');
 const emptyNoteEl = document.getElementById('empty-note');
 const searchEl = document.getElementById('search');
@@ -138,36 +139,141 @@ function sortRows(list) {
   return sorted;
 }
 
+const ORDER_KEY = 'list.columnOrder';
+
+const COLUMNS = [
+  { id: 'symbol', label: 'Symbol', left: true, tdClass: () => 'symbol', cell: r => `<a class="cell-link" href="chart.html?symbol=${encodeURIComponent(r.symbol)}">${r.symbol}</a>` },
+  { id: 'name', label: 'Name', left: true, tdClass: () => 'name', cell: r => r.name || '' },
+  { id: 'aiTheme', label: 'AI Theme', left: true, cell: r => r.aiTheme ? `<span class="theme-pill">${escapeHtml(r.aiTheme)}</span>` : '–' },
+  { id: 'sector', label: 'Sector', left: true, tdClass: () => 'sector', cell: r => escapeHtml(r.sector) || '–' },
+  { id: 'industry', label: 'Industry', left: true, tdClass: () => 'industry', cell: r => escapeHtml(r.industry) || '–' },
+  { id: 'price', label: 'Price', cell: r => fmt(r.price) },
+  { id: 'dailyChangePct', label: 'Daily Change', tdClass: r => pctClass(r.dailyChangePct), cell: r => r.dailyChangePct === undefined || r.dailyChangePct === null ? '–' : `${r.dailyChangePct >= 0 ? '+' : ''}${fmt(r.dailyChangePct)}%` },
+  { id: 'zone', label: 'Zone', cell: r => zonePill(r.zone) },
+  { id: 'pegRatio', label: 'PEG', cell: r => fmt(r.pegRatio) },
+  { id: 'roicPct', label: 'ROIC TTM', tdClass: r => pctClass(r.roicPct), cell: r => fmtPct(r.roicPct) },
+  { id: 'psRatio', label: 'P/S', cell: r => fmt(r.psRatio) },
+  { id: 'peRatio', label: 'P/E', cell: r => fmt(r.peRatio) },
+  { id: 'revenueGrowthPct', label: 'Revenue Growth (YoY)', tdClass: r => pctClass(r.revenueGrowthPct), cell: r => fmtPct(r.revenueGrowthPct) },
+  { id: 'netMarginPct', label: 'Net Profit Margin', tdClass: r => pctClass(r.netMarginPct), cell: r => fmtPct(r.netMarginPct) },
+  { id: 'recommendationKey', label: 'Rating', cell: r => ratingLabel(r.recommendationKey) },
+  { id: 'upsidePct', label: 'Target Upside', tdClass: r => r.upsidePct >= 0 ? 'pos' : 'neg', cell: r => r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%` },
+  { id: 'netOpenMarket', label: 'Net Open-Market (12M)', title: 'Open-market insider purchases minus sales over the last 12 months', tdClass: r => r.netOpenMarket ? pctClass(r.netOpenMarket) : '', cell: r => `<a class="cell-link" href="insider.html?symbol=${encodeURIComponent(r.symbol)}">${fmtNetUsd(r.netOpenMarket)}</a>` },
+  { id: 'flags', label: 'Flags', sortable: false, cell: r => flagBadges(r) },
+  { id: 'note', label: 'Note', left: true, tdClass: () => 'note-cell', cell: r => noteCell(r) },
+];
+
+let columnOrder = loadColumnOrder();
+
+function loadColumnOrder() {
+  const ids = COLUMNS.map(c => c.id);
+  let saved = [];
+  try {
+    saved = JSON.parse(localStorage.getItem(ORDER_KEY)) || [];
+  } catch {}
+  const order = saved.filter(id => ids.includes(id));
+  ids.forEach(id => {
+    if (!order.includes(id)) order.push(id);
+  });
+  return [...order.filter(id => id === 'symbol'), ...order.filter(id => id !== 'symbol')];
+}
+
+function orderedColumns() {
+  return columnOrder.map(id => COLUMNS.find(c => c.id === id));
+}
+
+function saveColumnOrder() {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(columnOrder));
+  } catch {}
+}
+
+function renderHead() {
+  headRowEl.innerHTML = orderedColumns().map(c => {
+    const pinned = c.id === 'symbol';
+    return `<th data-id="${c.id}"${c.sortable === false ? '' : ` data-key="${c.id}"`}${c.title ? ` title="${escapeHtml(c.title)}"` : ''}${pinned ? '' : ' draggable="true"'}${c.left ? ' class="left"' : ''}>${c.label}</th>`;
+  }).join('');
+}
+
+let dragId = null;
+
+function clearDropMarks() {
+  headRowEl.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+}
+
+function dropSide(th, e) {
+  const rect = th.getBoundingClientRect();
+  return e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+}
+
+headRowEl.addEventListener('dragstart', e => {
+  const th = e.target.closest('th');
+  if (!th || !th.draggable) return;
+  dragId = th.dataset.id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragId);
+  th.classList.add('dragging');
+});
+
+headRowEl.addEventListener('dragover', e => {
+  const th = e.target.closest('th');
+  if (!dragId || !th) return;
+  e.preventDefault();
+  clearDropMarks();
+  if (th.dataset.id === 'symbol' || th.dataset.id === dragId) return;
+  th.classList.add(`drop-${dropSide(th, e)}`);
+});
+
+headRowEl.addEventListener('drop', e => {
+  const th = e.target.closest('th');
+  if (!dragId || !th) return;
+  e.preventDefault();
+  const targetId = th.dataset.id;
+  if (targetId !== 'symbol' && targetId !== dragId) {
+    const side = dropSide(th, e);
+    const order = columnOrder.filter(id => id !== dragId);
+    const at = order.indexOf(targetId) + (side === 'after' ? 1 : 0);
+    order.splice(at, 0, dragId);
+    columnOrder = order;
+    saveColumnOrder();
+    renderHead();
+    render();
+  }
+  dragId = null;
+  clearDropMarks();
+});
+
+headRowEl.addEventListener('dragend', () => {
+  dragId = null;
+  clearDropMarks();
+  headRowEl.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+});
+
+headRowEl.addEventListener('click', e => {
+  const th = e.target.closest('th');
+  const key = th && th.dataset.key;
+  if (!key) return;
+  if (sortKey === key) {
+    sortDir *= -1;
+  } else {
+    sortKey = key;
+    sortDir = 1;
+  }
+  render();
+});
+
 function render() {
   const filtered = sortRows(rows.filter(matchesFilter));
 
   countEl.textContent = `${filtered.length} of ${rows.length} tickers`;
   emptyNoteEl.classList.toggle('hidden', filtered.length > 0);
 
+  const cols = orderedColumns();
   tableBodyEl.innerHTML = filtered.map(r => `
-    <tr data-symbol="${r.symbol}">
-      <td class="symbol"><a class="cell-link" href="chart.html?symbol=${encodeURIComponent(r.symbol)}">${r.symbol}</a></td>
-      <td class="name">${r.name || ''}</td>
-      <td>${r.aiTheme ? `<span class="theme-pill">${escapeHtml(r.aiTheme)}</span>` : '–'}</td>
-      <td class="sector">${escapeHtml(r.sector) || '–'}</td>
-      <td class="industry">${escapeHtml(r.industry) || '–'}</td>
-      <td>${fmt(r.price)}</td>
-      <td>${zonePill(r.zone)}</td>
-      <td>${fmt(r.pegRatio)}</td>
-      <td class="${pctClass(r.roicPct)}">${fmtPct(r.roicPct)}</td>
-      <td>${fmt(r.psRatio)}</td>
-      <td>${fmt(r.peRatio)}</td>
-      <td class="${pctClass(r.revenueGrowthPct)}">${fmtPct(r.revenueGrowthPct)}</td>
-      <td class="${pctClass(r.netMarginPct)}">${fmtPct(r.netMarginPct)}</td>
-      <td>${ratingLabel(r.recommendationKey)}</td>
-      <td class="${r.upsidePct >= 0 ? 'pos' : 'neg'}">${r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%`}</td>
-      <td class="${r.netOpenMarket ? pctClass(r.netOpenMarket) : ''}"><a class="cell-link" href="insider.html?symbol=${encodeURIComponent(r.symbol)}">${fmtNetUsd(r.netOpenMarket)}</a></td>
-      <td>${flagBadges(r)}</td>
-      <td class="note-cell">${noteCell(r)}</td>
-    </tr>
+    <tr data-symbol="${r.symbol}">${cols.map(c => `<td class="${c.tdClass ? c.tdClass(r) : ''}${c.left ? ' left' : ''}">${c.cell(r)}</td>`).join('')}</tr>
   `).join('');
 
-  document.querySelectorAll('thead th').forEach(th => {
+  headRowEl.querySelectorAll('th').forEach(th => {
     th.classList.toggle('sorted', th.dataset.key === sortKey);
   });
 }
@@ -190,20 +296,6 @@ noteModalEl.addEventListener('mousedown', e => {
 noteModalEl.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeNote();
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveNote();
-});
-
-document.querySelectorAll('thead th').forEach(th => {
-  th.addEventListener('click', () => {
-    const key = th.dataset.key;
-    if (!key) return;
-    if (sortKey === key) {
-      sortDir *= -1;
-    } else {
-      sortKey = key;
-      sortDir = 1;
-    }
-    render();
-  });
 });
 
 document.querySelectorAll('.filter-btn').forEach(btn => {
@@ -243,6 +335,7 @@ function carrySymbol() {
 
 async function init() {
   carrySymbol();
+  renderHead();
   const resp = await fetch('/api/screener');
   if (!resp.ok) {
     emptyNoteEl.textContent = `Error: ${await resp.text()}`;
