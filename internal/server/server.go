@@ -323,6 +323,7 @@ type screenerRowDTO struct {
 	Symbol             string   `json:"symbol"`
 	Name               string   `json:"name"`
 	Price              float64  `json:"price"`
+	DailyChangePct     *float64 `json:"dailyChangePct"`
 	Zone               string   `json:"zone"`
 	DeepDemand         bool     `json:"deepDemand"`
 	PEGRatio           *float64 `json:"pegRatio"`
@@ -453,6 +454,12 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		var dailyChangePct *float64
+		if len(bars) >= 2 && bars[len(bars)-2].Close > 0 {
+			v := (last.Close - bars[len(bars)-2].Close) / bars[len(bars)-2].Close * 100
+			dailyChangePct = &v
+		}
+
 		var upsidePct *float64
 		if targetMean != nil && *targetMean > 0 && last.Close > 0 {
 			v := (*targetMean - last.Close) / last.Close * 100
@@ -472,6 +479,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			Symbol:             info.Symbol,
 			Name:               info.Name,
 			Price:              last.Close,
+			DailyChangePct:     dailyChangePct,
 			Zone:               zone,
 			DeepDemand:         deepDemand,
 			PEGRatio:           fundamentals.PEGRatio,

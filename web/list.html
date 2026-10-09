@@ -130,7 +130,10 @@
   }
   thead th:hover { color: var(--text); }
   thead th.sorted { color: var(--text); }
-  thead th:nth-child(-n+5) { text-align: left; }
+  thead th.left { text-align: left; }
+  thead th.dragging { opacity: 0.4; }
+  thead th.drop-before { box-shadow: inset 3px 0 0 var(--supply); }
+  thead th.drop-after { box-shadow: inset -3px 0 0 var(--supply); }
   tbody td {
     padding: var(--space-2) var(--space-4);
     border: 1px solid var(--border);
@@ -138,7 +141,7 @@
     text-align: right;
     white-space: nowrap;
   }
-  tbody td:nth-child(-n+5) { text-align: left; }
+  tbody td.left { text-align: left; }
   tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
   tbody tr:hover { background: rgba(33, 87, 243, 0.12); }
   thead th:first-child, tbody td:first-child {
@@ -182,8 +185,7 @@
     color: #ef8b88;
     margin: 1px;
   }
-  thead th[data-key="note"] { text-align: left; }
-  td.note-cell { text-align: left; max-width: 240px; }
+  td.note-cell { max-width: 240px; }
   .note-btn {
     display: block;
     width: 100%;
@@ -278,26 +280,7 @@
   <div id="table-wrap">
     <table>
       <thead>
-        <tr>
-          <th data-key="symbol">Symbol</th>
-          <th data-key="name">Name</th>
-          <th data-key="aiTheme">AI Theme</th>
-          <th data-key="sector">Sector</th>
-          <th data-key="industry">Industry</th>
-          <th data-key="price">Price</th>
-          <th data-key="zone">Zone</th>
-          <th data-key="pegRatio">PEG</th>
-          <th data-key="roicPct">ROIC TTM</th>
-          <th data-key="psRatio">P/S</th>
-          <th data-key="peRatio">P/E</th>
-          <th data-key="revenueGrowthPct">Revenue Growth (YoY)</th>
-          <th data-key="netMarginPct">Net Profit Margin</th>
-          <th data-key="recommendationKey">Rating</th>
-          <th data-key="upsidePct">Target Upside</th>
-          <th data-key="netOpenMarket" title="Open-market insider purchases minus sales over the last 12 months">Net Open-Market (12M)</th>
-          <th>Flags</th>
-          <th data-key="note">Note</th>
-        </tr>
+        <tr id="head-row"></tr>
       </thead>
       <tbody id="table-body"></tbody>
     </table>
