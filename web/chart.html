@@ -222,21 +222,35 @@
   #ohlc-legend .legend-field { color: var(--muted); margin-right: 3px; }
   #ohlc-legend .legend-value { margin-right: 10px; }
   #ohlc-legend .legend-change { font-weight: 600; }
-  #fundamentals-table {
-    border-collapse: collapse;
+  #fundamentals-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-6);
+    padding: var(--space-3) var(--space-6) 0;
+    font-size: 12px;
+  }
+  #fundamentals-bar .fund-item { display: flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; }
+  #fundamentals-bar .metric { color: var(--muted); }
+  #fundamentals-bar .value { font-weight: 600; }
+  #theme-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-6) var(--space-3);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  #theme-bar .metric { color: var(--muted); }
+  .theme-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
     font-size: 11px;
-    border: 1px solid rgba(255,255,255,0.3);
-    background: rgba(0, 0, 0, 0.7);
-    margin-left: var(--space-2);
+    font-weight: 600;
+    background: rgba(168, 120, 255, 0.2);
+    color: #c3a2ff;
   }
-  #fundamentals-table th, #fundamentals-table td {
-    padding: 5px 10px;
-    border: 1px solid rgba(255,255,255,0.3);
-    text-align: center;
-    white-space: nowrap;
-  }
-  #fundamentals-table th { background: rgba(120,120,120,0.4); color: #fff; }
-  #fundamentals-table td.value { color: #fff; font-weight: 600; }
   #status { padding: var(--space-3) var(--space-6) var(--space-4); color: var(--muted); font-size: 12px; }
 
   #company-section {
@@ -334,22 +348,19 @@
     <button class="range-btn" data-range="1Y"><span>1Y</span><span class="range-pct" data-pct="1Y">–</span></button>
     <button class="range-btn" data-range="2Y"><span>2Y</span><span class="range-pct" data-pct="2Y">–</span></button>
     <button class="range-btn" id="reset-zoom" title="Reset zoom (Alt+R)"><span>Reset Zoom</span></button>
-    <table id="fundamentals-table">
-      <tr>
-        <th>P/E Ratio</th>
-        <th>PEG Ratio</th>
-        <th>Revenue Growth (YoY)</th>
-        <th>Net Profit Margin</th>
-        <th>Operating Margin (TTM)</th>
-      </tr>
-      <tr>
-        <td class="value" id="fund-pe">–</td>
-        <td class="value" id="fund-peg">–</td>
-        <td class="value" id="fund-rev-growth">–</td>
-        <td class="value" id="fund-net-margin">–</td>
-        <td class="value" id="fund-operating-margin">–</td>
-      </tr>
-    </table>
+  </div>
+
+  <div id="fundamentals-bar">
+    <span class="fund-item"><span class="metric">P/E Ratio</span><span class="value" id="fund-pe">–</span></span>
+    <span class="fund-item"><span class="metric">PEG Ratio</span><span class="value" id="fund-peg">–</span></span>
+    <span class="fund-item"><span class="metric">Revenue Growth (YoY)</span><span class="value" id="fund-rev-growth">–</span></span>
+    <span class="fund-item"><span class="metric">Net Profit Margin</span><span class="value" id="fund-net-margin">–</span></span>
+    <span class="fund-item"><span class="metric">Operating Margin (TTM)</span><span class="value" id="fund-operating-margin">–</span></span>
+  </div>
+
+  <div id="theme-bar">
+    <span class="metric">AI Theme</span>
+    <span id="ai-theme">–</span>
   </div>
 
   <div id="chart-wrap">

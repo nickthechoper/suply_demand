@@ -196,6 +196,12 @@ function updateIndicatorLegends(idx) {
   rsiDiffEl.style.color = diff == null ? '' : diff >= 0 ? '#26a69a' : '#ef5350';
 }
 
+function updateAITheme(theme) {
+  const el = document.getElementById('ai-theme');
+  el.className = theme ? 'theme-pill' : '';
+  el.textContent = theme || 'n/a';
+}
+
 chart.subscribeCrosshairMove(param => {
   if (!barsAscending.length) return;
   if (!param || !param.time) {
@@ -502,6 +508,7 @@ async function loadData() {
 
   updateLegend(barsAscending[barsAscending.length - 1], barsAscending[barsAscending.length - 2]);
   updateFundamentals(data.fundamentals);
+  updateAITheme(data.aiTheme);
 
   const z = data.zones;
   currentZones = z;
