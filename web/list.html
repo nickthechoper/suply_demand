@@ -104,7 +104,15 @@
     color: #c3a2ff;
   }
   td.sector, td.industry { color: var(--muted); }
-  #count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  #footer {
+    flex: none;
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--space-2) var(--space-6);
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #count { color: var(--muted); font-size: 12px; }
 
   #table-wrap {
     flex: 1;
@@ -274,7 +282,6 @@
     <select id="sector-filter" title="Filter by sector">
       <option value="all">All sectors</option>
     </select>
-    <span id="count"></span>
   </div>
 
   <div id="table-wrap">
@@ -286,6 +293,10 @@
     </table>
     <div id="empty-note" class="hidden">No tickers match.</div>
   </div>
+
+  <footer id="footer">
+    <span id="count"></span>
+  </footer>
 
   <div id="note-modal" class="hidden">
     <div id="note-dialog" role="dialog" aria-modal="true" aria-labelledby="note-title">
