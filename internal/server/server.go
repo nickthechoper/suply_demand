@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/screener", s.handleScreener)
 	mux.HandleFunc("/api/insider", s.handleInsider)
+	mux.HandleFunc("/api/insider/recent", s.handleInsiderRecent)
 	mux.HandleFunc("/api/note", s.handleNote)
 	files := http.FileServer(http.Dir(s.config.WebDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +330,7 @@ type screenerRowDTO struct {
 	DailyChangePct     *float64 `json:"dailyChangePct"`
 	Zone               string   `json:"zone"`
 	DeepDemand         bool     `json:"deepDemand"`
+	ZonePct            *float64 `json:"zonePct"`
 	PEGRatio           *float64 `json:"pegRatio"`
 	ROICPct            *float64 `json:"roicPct"`
 	PSRatio            *float64 `json:"psRatio"`
@@ -412,6 +415,12 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			zone = "demand"
 		}
 
+		var zonePct *float64
+		if span := result.Max - result.Min; span > 0 {
+			v := (last.Close - result.Min) / span * 100
+			zonePct = &v
+		}
+
 		deepDemand := zone == "demand" &&
 			last.Close <= result.DemandBtm+(result.DemandTop-result.DemandBtm)*s.config.DeepDemand
 
@@ -484,6 +493,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			DailyChangePct:     dailyChangePct,
 			Zone:               zone,
 			DeepDemand:         deepDemand,
+			ZonePct:            zonePct,
 			PEGRatio:           fundamentals.PEGRatio,
 			ROICPct:            fundamentals.ROICPct,
 			PSRatio:            fundamentals.PSRatio,
@@ -593,6 +603,57 @@ func (s *Server) handleInsider(w http.ResponseWriter, r *http.Request) {
 		"fetchedAt": fetchedAt,
 	}); err != nil {
 		log.Printf("encoding /api/insider response: %v", err)
+	}
+}
+
+type recentTradeDTO struct {
+	Symbol string `json:"symbol"`
+	Name   string `json:"name"`
+	openinsider.Trade
+}
+
+func (s *Server) handleInsiderRecent(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= openinsider.WindowDays {
+		days = d
+	}
+	infos, err := s.store.ListSymbolInfo()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := []recentTradeDTO{}
+	var oldest time.Time
+	for _, info := range infos {
+		trades, fetchedAt, ok, err := s.store.InsiderTrades(info.Symbol)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			continue
+		}
+		if oldest.IsZero() || fetchedAt.Before(oldest) {
+			oldest = fetchedAt
+		}
+		for _, t := range openinsider.Within(trades, days) {
+			out = append(out, recentTradeDTO{Symbol: info.Symbol, Name: info.Name, Trade: t})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TradeDate != out[j].TradeDate {
+			return out[i].TradeDate > out[j].TradeDate
+		}
+		return out[i].FilingDate > out[j].FilingDate
+	})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"days":      days,
+		"trades":    out,
+		"tickers":   len(infos),
+		"fetchedAt": oldest.Unix(),
+	}); err != nil {
+		log.Printf("encoding /api/insider/recent response: %v", err)
 	}
 }
 

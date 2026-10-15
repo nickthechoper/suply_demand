@@ -5,7 +5,8 @@ const emptyNoteEl = document.getElementById('empty-note');
 const searchEl = document.getElementById('search');
 const themeFilterEl = document.getElementById('theme-filter');
 const sectorFilterEl = document.getElementById('sector-filter');
-const countEl = document.getElementById('count');
+const industryFilterEl = document.getElementById('industry-filter');
+const countEl =document.getElementById('count');
 const noteModalEl = document.getElementById('note-modal');
 const noteTitleEl = document.getElementById('note-title');
 const noteTextEl = document.getElementById('note-text');
@@ -14,9 +15,9 @@ const noteHintEl = document.getElementById('note-hint');
 const noteSaveEl = document.getElementById('note-save');
 
 let rows = [];
-let zoneFilter = 'all';
 let themeFilter = 'all';
 let sectorFilter = 'all';
+let industryFilter = 'all';
 let query = '';
 let sortKey = 'symbol';
 let sortDir = 1;
@@ -42,9 +43,10 @@ function fmtNetUsd(n) {
   return `${n > 0 ? '+' : '−'}$${short}`;
 }
 
-function zonePill(zone) {
-  const label = zone === 'supply' ? 'Supply' : zone === 'demand' ? 'Demand' : '—';
-  return `<span class="zone-pill ${zone}">${label}</span>`;
+function zonePill(row) {
+  const label = row.zonePct === undefined || row.zonePct === null ? '—' : `${Number(row.zonePct.toFixed(1))}%`;
+  const side = row.zonePct === undefined || row.zonePct === null ? 'none' : row.zonePct < 50 ? 'demand' : 'supply';
+  return `<span class="zone-pill ${side}">${label}</span>`;
 }
 
 function ratingLabel(key) {
@@ -114,15 +116,13 @@ async function saveNote() {
 }
 
 function matchesFilter(row) {
-  if (zoneFilter === 'deep-demand') {
-    if (!row.deepDemand) return false;
-  } else if (zoneFilter !== 'all' && row.zone !== zoneFilter) return false;
   if (themeFilter === 'ai') {
     if (!row.aiTheme) return false;
   } else if (themeFilter === 'non-ai') {
     if (row.aiTheme) return false;
   } else if (themeFilter !== 'all' && row.aiTheme !== themeFilter) return false;
   if (sectorFilter !== 'all' && row.sector !== sectorFilter) return false;
+  if (industryFilter !== 'all' && row.industry !== industryFilter) return false;
   if (!query) return true;
   const q = query.toLowerCase();
   return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry].some(v => (v || '').toLowerCase().includes(q));
@@ -149,7 +149,7 @@ const COLUMNS = [
   { id: 'industry', label: 'Industry', left: true, tdClass: () => 'industry', cell: r => escapeHtml(r.industry) || '–' },
   { id: 'price', label: 'Price', cell: r => fmt(r.price) },
   { id: 'dailyChangePct', label: 'Daily Change', tdClass: r => pctClass(r.dailyChangePct), cell: r => r.dailyChangePct === undefined || r.dailyChangePct === null ? '–' : `${r.dailyChangePct >= 0 ? '+' : ''}${fmt(r.dailyChangePct)}%` },
-  { id: 'zone', label: 'Zone', cell: r => zonePill(r.zone) },
+  { id: 'zonePct', label: 'Zone', cell: r => zonePill(r) },
   { id: 'pegRatio', label: 'PEG', cell: r => fmt(r.pegRatio) },
   { id: 'roicPct', label: 'ROIC TTM', tdClass: r => pctClass(r.roicPct), cell: r => fmtPct(r.roicPct) },
   { id: 'psRatio', label: 'P/S', cell: r => fmt(r.psRatio) },
@@ -298,14 +298,6 @@ noteModalEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveNote();
 });
 
-document.querySelectorAll('.filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    zoneFilter = btn.dataset.zone;
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b === btn));
-    render();
-  });
-});
-
 themeFilterEl.addEventListener('change', () => {
   themeFilter = themeFilterEl.value;
   render();
@@ -313,8 +305,25 @@ themeFilterEl.addEventListener('change', () => {
 
 sectorFilterEl.addEventListener('change', () => {
   sectorFilter = sectorFilterEl.value;
+  refreshIndustryOptions();
   render();
 });
+
+industryFilterEl.addEventListener('change', () => {
+  industryFilter = industryFilterEl.value;
+  render();
+});
+
+function refreshIndustryOptions() {
+  const industries = [...new Set(rows
+    .filter(r => sectorFilter === 'all' || r.sector === sectorFilter)
+    .map(r => r.industry)
+    .filter(Boolean))].sort();
+  if (industryFilter !== 'all' && !industries.includes(industryFilter)) industryFilter = 'all';
+  industryFilterEl.innerHTML = '<option value="all">All industries</option>';
+  fillFilterOptions(industryFilterEl, industries);
+  industryFilterEl.value = industryFilter;
+}
 
 function fillFilterOptions(el, values, labelFor = v => v) {
   el.insertAdjacentHTML('beforeend', values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(labelFor(v))}</option>`).join(''));
@@ -344,12 +353,10 @@ async function init() {
   }
   const data = await resp.json();
   rows = data.rows || [];
-  if (data.deepDemandPct !== undefined) {
-    document.getElementById('deep-demand-btn').textContent = `Demand Low ${Number(data.deepDemandPct.toFixed(1))}%`;
-  }
   const count = key => rows.filter(r => r[key]).length;
   fillFilterOptions(themeFilterEl, (data.aiThemes || []).filter(t => rows.some(r => r.aiTheme === t)));
   fillFilterOptions(sectorFilterEl, [...new Set(rows.map(r => r.sector).filter(Boolean))].sort());
+  refreshIndustryOptions();
   themeFilterEl.querySelector('[value="ai"]').textContent = `All AI (${count('aiTheme')})`;
   render();
 }

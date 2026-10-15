@@ -74,7 +74,7 @@
     font-size: 13px;
     width: 220px;
   }
-  .filter-btn, .modal-btn {
+  .modal-btn {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
@@ -83,9 +83,8 @@
     cursor: pointer;
     font-size: 13px;
   }
-  .filter-btn:hover, .modal-btn:hover { border-color: var(--supply); }
-  .filter-btn.active { background: var(--supply); border-color: var(--supply); color: #fff; }
-  #theme-filter, #sector-filter {
+  .modal-btn:hover { border-color: var(--supply); }
+  #theme-filter, #sector-filter, #industry-filter {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
@@ -270,10 +269,6 @@
 
   <div id="toolbar">
     <input id="search" type="text" placeholder="Filter by ticker, name or note…" autocomplete="off" spellcheck="false" />
-    <button class="filter-btn active" data-zone="all">All</button>
-    <button class="filter-btn" data-zone="demand">Demand Zone</button>
-    <button class="filter-btn" data-zone="deep-demand" id="deep-demand-btn">Demand Low</button>
-    <button class="filter-btn" data-zone="supply">Supply Zone</button>
     <select id="theme-filter" title="Filter by AI theme">
       <option value="all">All themes</option>
       <option value="ai">All AI</option>
@@ -281,6 +276,9 @@
     </select>
     <select id="sector-filter" title="Filter by sector">
       <option value="all">All sectors</option>
+    </select>
+    <select id="industry-filter" title="Filter by industry">
+      <option value="all">All industries</option>
     </select>
   </div>
 
