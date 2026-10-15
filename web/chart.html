@@ -302,9 +302,6 @@
   .bonds-summary { font-size: 13px; color: var(--muted); margin-bottom: var(--space-3); }
   .bonds-summary b { color: var(--text); }
   .bonds-scroll { max-height: 360px; overflow: auto; }
-  .bond-history-title { font-size: 12px; color: var(--muted); margin-bottom: var(--space-2); }
-  .bond-history-title b { color: var(--text); }
-  .bond-chart { height: 240px; margin-bottom: var(--space-4); }
   .bonds-scroll tr[data-bond] { cursor: pointer; }
   .bonds-scroll tr[data-bond]:hover td { background: rgba(255,255,255,0.04); }
   .bonds-scroll tr.selected-row td { background: rgba(255, 183, 77, 0.14); }
@@ -389,6 +386,14 @@
     </div>
     <div id="supply-box" class="zone-box supply"><span class="zone-label">Supply Zone</span></div>
     <div id="demand-box" class="zone-box demand"><span class="zone-label">Demand Zone</span></div>
+  </div>
+
+  <div id="bond-wrap" class="indicator-wrap hidden">
+    <div id="bond-pane-chart" class="indicator-chart"></div>
+    <div class="indicator-legend">
+      <span class="legend-name" id="legend-bond-name">Bond Yield</span>
+      <span class="legend-value" id="legend-bond" style="color:#ffb74d">–</span>
+    </div>
   </div>
 
   <div id="atr-wrap" class="indicator-wrap">

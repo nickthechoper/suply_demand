@@ -54,13 +54,21 @@ function createIndicatorChart(el) {
   });
 }
 
+const bondChartEl = document.getElementById('bond-pane-chart');
 const atrChartEl = document.getElementById('atr-chart');
 const rsiChartEl = document.getElementById('rsi-chart');
 const rsiDiffChartEl = document.getElementById('rsi-diff-chart');
 
+const bondChart = createIndicatorChart(bondChartEl);
 const atrChart = createIndicatorChart(atrChartEl);
 const rsiChart = createIndicatorChart(rsiChartEl);
 const rsiDiffChart = createIndicatorChart(rsiDiffChartEl);
+
+const bondSeries = bondChart.addLineSeries({
+  color: '#ffb74d',
+  lineWidth: 2,
+  priceFormat: { type: 'custom', formatter: v => `${v.toFixed(2)}%` },
+});
 
 const atrSeries = atrChart.addLineSeries({ color: '#ef5350', lineWidth: 2 });
 
@@ -87,8 +95,8 @@ const rsiDiffSeries = rsiDiffChart.addBaselineSeries({
   lineWidth: 2,
 });
 
-const allCharts = [chart, atrChart, rsiChart, rsiDiffChart];
-const allChartEls = [chartEl, atrChartEl, rsiChartEl, rsiDiffChartEl];
+const allCharts = [chart, bondChart, atrChart, rsiChart, rsiDiffChart];
+const allChartEls = [chartEl, bondChartEl, atrChartEl, rsiChartEl, rsiDiffChartEl];
 
 const WHEEL_ZOOM_STEP = 0.1;
 
@@ -110,11 +118,14 @@ function onWheelZoom(chartInstance, containerEl) {
 }
 
 allCharts.forEach((c, i) => {
-  allChartEls[i].addEventListener('wheel', onWheelZoom(c, allChartEls[i]), { passive: false });
+  allChartEls[i].addEventListener('wheel', onWheelZoom(c === bondChart ? chart : c, allChartEls[i]), { passive: false });
 });
+
+const bondWrapEl = document.getElementById('bond-wrap');
 
 let syncingRange = false;
 allCharts.forEach(c => {
+  if (c === bondChart) return;
   c.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (syncingRange || !range) return;
     syncingRange = true;
@@ -125,9 +136,15 @@ allCharts.forEach(c => {
   });
 });
 
+function alignBondChart() {
+  const range = chart.timeScale().getVisibleLogicalRange();
+  if (range) bondChart.timeScale().setVisibleLogicalRange(range);
+}
+
 let syncingCrosshair = false;
 const crosshairSeriesByChart = new Map([
   [chart, candleSeries],
+  [bondChart, bondSeries],
   [atrChart, atrSeries],
   [rsiChart, rsiSeries],
   [rsiDiffChart, rsiDiffSeries],
@@ -135,6 +152,7 @@ const crosshairSeriesByChart = new Map([
 function crosshairValueForChart(otherChart, idx) {
   if (idx === undefined) return 0;
   if (otherChart === chart) return barsAscending[idx].close;
+  if (otherChart === bondChart) return bondValues[idx] ?? 0;
   if (otherChart === atrChart) return atrValues[idx] ?? 0;
   if (otherChart === rsiChart) return rsiValues[idx] ?? 0;
   return rsiDiffValues[idx] ?? 0;
@@ -166,6 +184,8 @@ function clearAllCrosshairs() {
   updateIndicatorLegends(barsAscending.length - 1);
 }
 
+let bondHistory = [];
+let bondValues = [];
 let atrValues = [];
 let rsiValues = [];
 let rsiMaValues = [];
@@ -176,11 +196,13 @@ function fmtIndicator(n) {
 }
 
 function updateIndicatorLegends(idx) {
+  const bondEl = document.getElementById('legend-bond');
   const atrEl = document.getElementById('legend-atr');
   const rsiEl = document.getElementById('legend-rsi');
   const rsiMaEl = document.getElementById('legend-rsi-ma');
   const rsiDiffEl = document.getElementById('legend-rsi-diff');
   if (idx === null || idx === undefined) {
+    bondEl.textContent = '–';
     atrEl.textContent = '–';
     rsiEl.textContent = '–';
     rsiMaEl.textContent = '–';
@@ -188,6 +210,7 @@ function updateIndicatorLegends(idx) {
     rsiDiffEl.style.color = '';
     return;
   }
+  bondEl.textContent = bondValues[idx] == null ? '–' : `${fmtIndicator(bondValues[idx])}%`;
   atrEl.textContent = fmtIndicator(atrValues[idx]);
   rsiEl.textContent = fmtIndicator(rsiValues[idx]);
   rsiMaEl.textContent = fmtIndicator(rsiMaValues[idx]);
@@ -273,6 +296,25 @@ function toSeriesData(bars, values) {
   );
 }
 
+function barDate(time) {
+  return new Date(time * 1000).toISOString().slice(0, 10);
+}
+
+function updateBondPane() {
+  let j = 0;
+  let last = null;
+  bondValues = barsAscending.map(b => {
+    const date = barDate(b.time);
+    while (j < bondHistory.length && bondHistory[j].date <= date) {
+      last = bondHistory[j].yieldPct;
+      j++;
+    }
+    return last;
+  });
+  bondSeries.setData(toSeriesData(barsAscending, bondValues));
+  alignBondChart();
+}
+
 function updateIndicators() {
   atrValues = computeATR(barsAscending, 14);
   rsiValues = computeRSI(barsAscending, 14);
@@ -281,6 +323,7 @@ function updateIndicators() {
     rsiValues[i] === null || rsiMaValues[i] === null ? null : rsiValues[i] - rsiMaValues[i]
   );
 
+  updateBondPane();
   atrSeries.setData(toSeriesData(barsAscending, atrValues));
   rsiSeries.setData(toSeriesData(barsAscending, rsiValues));
   rsiMaSeries.setData(toSeriesData(barsAscending, rsiMaValues));
@@ -288,6 +331,13 @@ function updateIndicators() {
 
   updateIndicatorLegends(barsAscending.length - 1);
 }
+
+new ResizeObserver(entries => {
+  for (const entry of entries) {
+    bondChart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height });
+  }
+  alignBondChart();
+}).observe(bondWrapEl);
 
 new ResizeObserver(entries => {
   for (const entry of entries) {
@@ -808,50 +858,37 @@ function bondLabel(b) {
   return `${b.couponPct != null ? Number(b.couponPct.toFixed(3)) : '?'}% ${b.maturity || ''}`;
 }
 
-let bondChart = null;
-let bondSeries = null;
+function setBondPane(visible, label) {
+  bondWrapEl.classList.toggle('hidden', !visible);
+  document.getElementById('legend-bond-name').innerHTML = label;
+}
 
-function createBondChart(el) {
-  if (bondChart) bondChart.remove();
-  bondChart = LightweightCharts.createChart(el, {
-    autoSize: true,
-    layout: { background: { color: '#161b22' }, textColor: '#e6e6e6' },
-    grid: {
-      vertLines: { color: '#1c2128' },
-      horzLines: { color: '#1c2128' },
-    },
-    timeScale: { borderColor: '#2a3038' },
-    rightPriceScale: { borderColor: '#2a3038', minimumWidth: PRICE_SCALE_WIDTH },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
-    handleScroll: false,
-    handleScale: false,
-  });
-  bondSeries = bondChart.addLineSeries({
-    color: '#ffb74d',
-    lineWidth: 2,
-    priceFormat: { type: 'custom', formatter: v => `${v.toFixed(2)}%` },
-  });
+function clearBondPane(visible, label) {
+  bondHistory = [];
+  updateBondPane();
+  updateIndicatorLegends(barsAscending.length - 1);
+  setBondPane(visible, label);
 }
 
 async function loadBondHistory(symbol, bond) {
-  const titleEl = document.getElementById('bond-history-title');
   document.querySelectorAll('#bonds-body tr[data-bond]').forEach(tr => tr.classList.toggle('selected-row', tr.dataset.bond === bond));
-  titleEl.innerHTML = 'Loading yield history…';
+  setBondPane(true, 'Bond Yield · loading…');
   try {
     const resp = await fetch(`/api/bonds/history?symbol=${encodeURIComponent(symbol)}&bond=${encodeURIComponent(bond)}`);
-    if (symbol !== currentSymbol || !document.getElementById('bond-history-title')) return;
+    if (symbol !== currentSymbol) return;
     if (!resp.ok) {
-      titleEl.textContent = `Yield history unavailable: ${await resp.text()}`;
-      bondSeries.setData([]);
+      clearBondPane(true, `Bond Yield · unavailable: ${await resp.text()}`);
       return;
     }
     const data = await resp.json();
-    const history = data.history || [];
-    bondSeries.setData(history.map(p => ({ time: p.date, value: p.yieldPct })));
-    bondChart.timeScale().fitContent();
-    titleEl.innerHTML = history.length
-      ? `Daily yield (median trade) · <b>${data.label}</b> · ${history.length} trading days since ${history[0].date}`
-      : `No trades in the last two years for the <b>${data.label}</b>.`;
+    if (!data.history || !data.history.length) {
+      clearBondPane(true, `Bond Yield ${data.label} · no trades in the last two years`);
+      return;
+    }
+    bondHistory = data.history;
+    updateBondPane();
+    updateIndicatorLegends(barsAscending.length - 1);
+    setBondPane(true, `Bond Yield ${data.label}`);
   } catch (e) {
     console.error('loading bond history failed', e);
   }
@@ -862,6 +899,7 @@ function renderBonds(data) {
   const bonds = data.bonds || [];
   if (!bonds.length) {
     el.innerHTML = '<span class="empty-note">No bonds found in FINRA TRACE for this ticker.</span>';
+    clearBondPane(false, 'Bond Yield');
     return;
   }
   const headline = bonds.find(b => b.symbol === data.headline);
@@ -869,7 +907,7 @@ function renderBonds(data) {
     ? `<div class="bonds-summary">Highest straight-bond yield: <b class="${yieldClass(headline.yieldPct)}">${fmt(headline.yieldPct)}%</b> on the ${bondLabel(headline)} (${fmtBp(headline.yieldChange)} on the last trade)</div>`
     : '<div class="bonds-summary">No straight bond with a recent trade.</div>';
   const rows = bonds.map(b => `
-    <tr data-bond="${b.symbol}" class="${b.symbol === data.headline ? 'highlight-row' : ''}" title="${b.issuer || ''} · CUSIP ${b.cusip || 'n/a'} · click for yield history">
+    <tr data-bond="${b.symbol}" class="${b.symbol === data.headline ? 'highlight-row' : ''}" title="${b.issuer || ''} · CUSIP ${b.cusip || 'n/a'} · click to show its yield under the price chart">
       <td>${bondLabel(b)}${b.convertible ? '<span class="bond-tag">Convertible</span>' : ''}${b.callable ? '<span class="bond-tag">Callable</span>' : ''}</td>
       <td>${[b.moodys, b.sp].filter(Boolean).join(' / ') || 'n/a'}</td>
       <td>${fmt(b.price)}</td>
@@ -879,8 +917,7 @@ function renderBonds(data) {
       <td>${b.lastTrade || 'n/a'}</td>
     </tr>
   `).join('');
-  el.innerHTML = `${summary}<div class="bond-history-title" id="bond-history-title"></div><div class="bond-chart" id="bond-chart"></div><div class="bonds-scroll"><table><tr><th>Bond</th><th>Rating (Moody's / S&amp;P)</th><th>Price</th><th>Change</th><th>Yield</th><th>Yield Change</th><th>Last Trade</th></tr>${rows}</table></div>`;
-  createBondChart(document.getElementById('bond-chart'));
+  el.innerHTML = `${summary}<div class="bonds-scroll"><table><tr><th>Bond</th><th>Rating (Moody's / S&amp;P)</th><th>Price</th><th>Change</th><th>Yield</th><th>Yield Change</th><th>Last Trade</th></tr>${rows}</table></div>`;
   el.querySelectorAll('tr[data-bond]').forEach(tr => tr.addEventListener('click', () => loadBondHistory(data.symbol, tr.dataset.bond)));
   const first = headline || bonds.find(b => b.lastTrade) || bonds[0];
   loadBondHistory(data.symbol, first.symbol);
@@ -894,6 +931,7 @@ async function loadBonds() {
     if (symbol !== currentSymbol) return;
     if (!resp.ok) {
       el.innerHTML = `<span class="empty-note">Unavailable: ${await resp.text()}</span>`;
+      clearBondPane(false, 'Bond Yield');
       return;
     }
     renderBonds(await resp.json());
