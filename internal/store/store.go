@@ -9,6 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"supplydemand/internal/finra"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/yahoo"
 )
@@ -113,12 +114,53 @@ func Open(path string) (*Store, error) {
 	}
 
 	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS bonds (
+			symbol     TEXT PRIMARY KEY,
+			data       TEXT NOT NULL,
+			fetched_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating bonds table: %w", err)
+	}
+
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS demand_alerts (
 			symbol  TEXT PRIMARY KEY,
 			sent_at INTEGER NOT NULL
 		)
 	`); err != nil {
 		return nil, fmt.Errorf("creating demand_alerts table: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS bond_alerts (
+			symbol    TEXT PRIMARY KEY,
+			direction TEXT NOT NULL,
+			sent_at   INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating bond_alerts table: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS bond_yields (
+			bond      TEXT NOT NULL,
+			date      TEXT NOT NULL,
+			yield_pct REAL NOT NULL,
+			trades    INTEGER NOT NULL,
+			PRIMARY KEY (bond, date)
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating bond_yields table: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS bond_history (
+			bond       TEXT PRIMARY KEY,
+			fetched_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating bond_history table: %w", err)
 	}
 
 	return &Store{db: db}, nil
@@ -317,6 +359,37 @@ func (s *Store) InsiderTrades(symbol string) (trades []openinsider.Trade, fetche
 	return trades, time.Unix(ts, 0).UTC(), true, nil
 }
 
+func (s *Store) SetBonds(symbol string, bonds []finra.Bond) error {
+	blob, err := json.Marshal(bonds)
+	if err != nil {
+		return fmt.Errorf("encoding bonds: %w", err)
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO bonds (symbol, data, fetched_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET
+			data = excluded.data,
+			fetched_at = excluded.fetched_at
+	`, symbol, string(blob), time.Now().Unix())
+	return err
+}
+
+func (s *Store) Bonds(symbol string) (bonds []finra.Bond, fetchedAt time.Time, ok bool, err error) {
+	var blob string
+	var ts int64
+	row := s.db.QueryRow(`SELECT data, fetched_at FROM bonds WHERE symbol = ?`, symbol)
+	if scanErr := row.Scan(&blob, &ts); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			return nil, time.Time{}, false, nil
+		}
+		return nil, time.Time{}, false, scanErr
+	}
+	if err := json.Unmarshal([]byte(blob), &bonds); err != nil {
+		return nil, time.Time{}, false, fmt.Errorf("decoding stored bonds: %w", err)
+	}
+	return bonds, time.Unix(ts, 0).UTC(), true, nil
+}
+
 func (s *Store) DemandAlertSent(symbol string) (bool, error) {
 	var sentAt int64
 	err := s.db.QueryRow(`SELECT sent_at FROM demand_alerts WHERE symbol = ?`, symbol).Scan(&sentAt)
@@ -336,6 +409,88 @@ func (s *Store) MarkDemandAlert(symbol string) error {
 
 func (s *Store) ClearDemandAlert(symbol string) error {
 	_, err := s.db.Exec(`DELETE FROM demand_alerts WHERE symbol = ?`, symbol)
+	return err
+}
+
+func (s *Store) UpsertBondYields(bond string, points []finra.DailyYield) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO bond_yields (bond, date, yield_pct, trades) VALUES (?, ?, ?, ?)
+		ON CONFLICT(bond, date) DO UPDATE SET yield_pct = excluded.yield_pct, trades = excluded.trades
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, p := range points {
+		if _, err := stmt.Exec(bond, p.Date, p.YieldPct, p.Trades); err != nil {
+			return fmt.Errorf("upserting bond yield on %s: %w", p.Date, err)
+		}
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO bond_history (bond, fetched_at) VALUES (?, ?)
+		ON CONFLICT(bond) DO UPDATE SET fetched_at = excluded.fetched_at
+	`, bond, time.Now().Unix()); err != nil {
+		return fmt.Errorf("stamping bond history fetch time: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) BondYields(bond string) ([]finra.DailyYield, error) {
+	rows, err := s.db.Query(`SELECT date, yield_pct, trades FROM bond_yields WHERE bond = ? ORDER BY date`, bond)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := []finra.DailyYield{}
+	for rows.Next() {
+		var p finra.DailyYield
+		if err := rows.Scan(&p.Date, &p.YieldPct, &p.Trades); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	return points, rows.Err()
+}
+
+func (s *Store) BondHistoryFetchedAt(bond string) (time.Time, bool, error) {
+	var ts int64
+	err := s.db.QueryRow(`SELECT fetched_at FROM bond_history WHERE bond = ?`, bond).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return time.Unix(ts, 0).UTC(), true, nil
+}
+
+func (s *Store) BondAlertDirection(symbol string) (string, error) {
+	var direction string
+	err := s.db.QueryRow(`SELECT direction FROM bond_alerts WHERE symbol = ?`, symbol).Scan(&direction)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return direction, err
+}
+
+func (s *Store) MarkBondAlert(symbol, direction string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO bond_alerts (symbol, direction, sent_at) VALUES (?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET direction = excluded.direction, sent_at = excluded.sent_at
+	`, symbol, direction, time.Now().Unix())
+	return err
+}
+
+func (s *Store) ClearBondAlert(symbol string) error {
+	_, err := s.db.Exec(`DELETE FROM bond_alerts WHERE symbol = ?`, symbol)
 	return err
 }
 
@@ -419,15 +574,17 @@ type FetchTimes struct {
 	Fundamentals time.Time
 	CompanyData  time.Time
 	Insider      time.Time
+	Bonds        time.Time
 }
 
 func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
 	rows, err := s.db.Query(`
-		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0)
+		SELECT s.symbol, s.name, s.bars_fetched_at, COALESCE(f.fetched_at, 0), COALESCE(c.fetched_at, 0), COALESCE(i.fetched_at, 0), COALESCE(b.fetched_at, 0)
 		FROM symbols s
 		LEFT JOIN fundamentals f ON f.symbol = s.symbol
 		LEFT JOIN company_data c ON c.symbol = s.symbol
 		LEFT JOIN insider_trades i ON i.symbol = s.symbol
+		LEFT JOIN bonds b ON b.symbol = s.symbol
 		ORDER BY s.symbol
 	`)
 	if err != nil {
@@ -438,14 +595,15 @@ func (s *Store) ListFetchTimes() ([]FetchTimes, error) {
 	var out []FetchTimes
 	for rows.Next() {
 		var ft FetchTimes
-		var bars, fundamentals, companyData, insider int64
-		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider); err != nil {
+		var bars, fundamentals, companyData, insider, bonds int64
+		if err := rows.Scan(&ft.Symbol, &ft.Name, &bars, &fundamentals, &companyData, &insider, &bonds); err != nil {
 			return nil, err
 		}
 		ft.Bars = unixOrZero(bars)
 		ft.Fundamentals = unixOrZero(fundamentals)
 		ft.CompanyData = unixOrZero(companyData)
 		ft.Insider = unixOrZero(insider)
+		ft.Bonds = unixOrZero(bonds)
 		out = append(out, ft)
 	}
 	return out, rows.Err()

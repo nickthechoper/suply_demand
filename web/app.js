@@ -794,7 +794,116 @@ function renderFilings(filings) {
   `).join('');
 }
 
+function yieldClass(y) {
+  return y == null ? '' : y >= 15 ? 'yield-distress' : y >= 10 ? 'yield-high' : '';
+}
+
+function fmtBp(change) {
+  if (change == null) return 'n/a';
+  const bp = Math.round(change * 100);
+  return `<span style="color:${bp > 0 ? '#ef5350' : bp < 0 ? '#26a69a' : 'inherit'}">${bp > 0 ? '+' : ''}${bp} bp</span>`;
+}
+
+function bondLabel(b) {
+  return `${b.couponPct != null ? Number(b.couponPct.toFixed(3)) : '?'}% ${b.maturity || ''}`;
+}
+
+let bondChart = null;
+let bondSeries = null;
+
+function createBondChart(el) {
+  if (bondChart) bondChart.remove();
+  bondChart = LightweightCharts.createChart(el, {
+    autoSize: true,
+    layout: { background: { color: '#161b22' }, textColor: '#e6e6e6' },
+    grid: {
+      vertLines: { color: '#1c2128' },
+      horzLines: { color: '#1c2128' },
+    },
+    timeScale: { borderColor: '#2a3038' },
+    rightPriceScale: { borderColor: '#2a3038', minimumWidth: PRICE_SCALE_WIDTH },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
+    handleScroll: false,
+    handleScale: false,
+  });
+  bondSeries = bondChart.addLineSeries({
+    color: '#ffb74d',
+    lineWidth: 2,
+    priceFormat: { type: 'custom', formatter: v => `${v.toFixed(2)}%` },
+  });
+}
+
+async function loadBondHistory(symbol, bond) {
+  const titleEl = document.getElementById('bond-history-title');
+  document.querySelectorAll('#bonds-body tr[data-bond]').forEach(tr => tr.classList.toggle('selected-row', tr.dataset.bond === bond));
+  titleEl.innerHTML = 'Loading yield history…';
+  try {
+    const resp = await fetch(`/api/bonds/history?symbol=${encodeURIComponent(symbol)}&bond=${encodeURIComponent(bond)}`);
+    if (symbol !== currentSymbol || !document.getElementById('bond-history-title')) return;
+    if (!resp.ok) {
+      titleEl.textContent = `Yield history unavailable: ${await resp.text()}`;
+      bondSeries.setData([]);
+      return;
+    }
+    const data = await resp.json();
+    const history = data.history || [];
+    bondSeries.setData(history.map(p => ({ time: p.date, value: p.yieldPct })));
+    bondChart.timeScale().fitContent();
+    titleEl.innerHTML = history.length
+      ? `Daily yield (median trade) · <b>${data.label}</b> · ${history.length} trading days since ${history[0].date}`
+      : `No trades in the last two years for the <b>${data.label}</b>.`;
+  } catch (e) {
+    console.error('loading bond history failed', e);
+  }
+}
+
+function renderBonds(data) {
+  const el = document.getElementById('bonds-body');
+  const bonds = data.bonds || [];
+  if (!bonds.length) {
+    el.innerHTML = '<span class="empty-note">No bonds found in FINRA TRACE for this ticker.</span>';
+    return;
+  }
+  const headline = bonds.find(b => b.symbol === data.headline);
+  const summary = headline
+    ? `<div class="bonds-summary">Highest straight-bond yield: <b class="${yieldClass(headline.yieldPct)}">${fmt(headline.yieldPct)}%</b> on the ${bondLabel(headline)} (${fmtBp(headline.yieldChange)} on the last trade)</div>`
+    : '<div class="bonds-summary">No straight bond with a recent trade.</div>';
+  const rows = bonds.map(b => `
+    <tr data-bond="${b.symbol}" class="${b.symbol === data.headline ? 'highlight-row' : ''}" title="${b.issuer || ''} · CUSIP ${b.cusip || 'n/a'} · click for yield history">
+      <td>${bondLabel(b)}${b.convertible ? '<span class="bond-tag">Convertible</span>' : ''}${b.callable ? '<span class="bond-tag">Callable</span>' : ''}</td>
+      <td>${[b.moodys, b.sp].filter(Boolean).join(' / ') || 'n/a'}</td>
+      <td>${fmt(b.price)}</td>
+      <td>${b.priceChange != null ? `<span style="color:${b.priceChange >= 0 ? '#26a69a' : '#ef5350'}">${b.priceChange >= 0 ? '+' : ''}${fmt(b.priceChange)}</span>` : 'n/a'}</td>
+      <td class="${yieldClass(b.convertible ? null : b.yieldPct)}">${b.yieldPct != null ? `${fmt(b.yieldPct)}%` : 'n/a'}</td>
+      <td>${fmtBp(b.yieldChange)}</td>
+      <td>${b.lastTrade || 'n/a'}</td>
+    </tr>
+  `).join('');
+  el.innerHTML = `${summary}<div class="bond-history-title" id="bond-history-title"></div><div class="bond-chart" id="bond-chart"></div><div class="bonds-scroll"><table><tr><th>Bond</th><th>Rating (Moody's / S&amp;P)</th><th>Price</th><th>Change</th><th>Yield</th><th>Yield Change</th><th>Last Trade</th></tr>${rows}</table></div>`;
+  createBondChart(document.getElementById('bond-chart'));
+  el.querySelectorAll('tr[data-bond]').forEach(tr => tr.addEventListener('click', () => loadBondHistory(data.symbol, tr.dataset.bond)));
+  const first = headline || bonds.find(b => b.lastTrade) || bonds[0];
+  loadBondHistory(data.symbol, first.symbol);
+}
+
+async function loadBonds() {
+  const symbol = currentSymbol;
+  const el = document.getElementById('bonds-body');
+  try {
+    const resp = await fetch(`/api/bonds?symbol=${encodeURIComponent(symbol)}`);
+    if (symbol !== currentSymbol) return;
+    if (!resp.ok) {
+      el.innerHTML = `<span class="empty-note">Unavailable: ${await resp.text()}</span>`;
+      return;
+    }
+    renderBonds(await resp.json());
+  } catch (e) {
+    console.error('loading bonds failed', e);
+  }
+}
+
 async function loadCompanyData() {
+  loadBonds();
   const insiderHref = `insider.html?symbol=${encodeURIComponent(currentSymbol)}`;
   document.getElementById('insider-link').href = insiderHref;
   document.getElementById('insider-all-link').href = insiderHref;
@@ -825,7 +934,7 @@ document.getElementById('refresh').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   btn.classList.add('spinning');
-  statusEl.textContent = 'Refreshing from Yahoo Finance and OpenInsider…';
+  statusEl.textContent = 'Refreshing from Yahoo Finance, OpenInsider and FINRA…';
   try {
     const resp = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}`, { method: 'POST' });
     if (!resp.ok) {

@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"supplydemand/internal/bondhist"
 	"supplydemand/internal/category"
+	"supplydemand/internal/finra"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
@@ -100,6 +102,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/insider", s.handleInsider)
 	mux.HandleFunc("/api/insider/recent", s.handleInsiderRecent)
 	mux.HandleFunc("/api/note", s.handleNote)
+	mux.HandleFunc("/api/bonds", s.handleBonds)
+	mux.HandleFunc("/api/bonds/history", s.handleBondHistory)
 	files := http.FileServer(http.Dir(s.config.WebDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
@@ -313,6 +317,19 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		insiderTradesFetched = false
 	}
 
+	bondsFetched := true
+	name, err := s.store.SymbolName(symbol)
+	if err != nil {
+		log.Printf("looking up name for %s: %v", symbol, err)
+	}
+	if bonds, err := finra.Fetch(symbol, name); err != nil {
+		log.Printf("warning: could not refresh bonds: %v", err)
+		bondsFetched = false
+	} else if err := s.store.SetBonds(symbol, bonds); err != nil {
+		log.Printf("warning: could not store refreshed bonds: %v", err)
+		bondsFetched = false
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"symbol":               symbol,
@@ -320,6 +337,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		"fundamentalsFetched":  fundamentalsFetched,
 		"companyDataFetched":   companyDataFetched,
 		"insiderTradesFetched": insiderTradesFetched,
+		"bondsFetched":         bondsFetched,
 	})
 }
 
@@ -343,6 +361,9 @@ type screenerRowDTO struct {
 	UpsidePct          *float64 `json:"upsidePct"`
 	Flags              []string `json:"flags"`
 	NetOpenMarket      *float64 `json:"netOpenMarket"`
+	BondYieldPct       *float64 `json:"bondYieldPct"`
+	BondYieldChange    *float64 `json:"bondYieldChange"`
+	BondLabel          string   `json:"bondLabel"`
 	Note               string   `json:"note"`
 	Sector             string   `json:"sector"`
 	Industry           string   `json:"industry"`
@@ -358,7 +379,10 @@ type flagInput struct {
 	FreeCashflow          *float64
 	NetDebtToMarketCapPct *float64
 	CurrentRatio          *float64
+	BondYieldPct          *float64
 }
+
+const highBondYieldPct = 10
 
 func flags(in flagInput) []string {
 	var out []string
@@ -373,6 +397,9 @@ func flags(in flagInput) []string {
 	}
 	if in.CurrentRatio != nil && *in.CurrentRatio < 1 {
 		out = append(out, "Weak liquidity")
+	}
+	if in.BondYieldPct != nil && *in.BondYieldPct >= highBondYieldPct {
+		out = append(out, "High bond yield")
 	}
 	if in.EarningsGrowthPct != nil && in.RevenueGrowthPct != nil && *in.EarningsGrowthPct < *in.RevenueGrowthPct-20 {
 		out = append(out, "Earnings growth lagging revenue")
@@ -486,6 +513,17 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			netOpenMarket = &net
 		}
 
+		var bondYieldPct, bondYieldChange *float64
+		var bondLabel string
+		if bonds, _, ok, err := s.store.Bonds(info.Symbol); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if ok {
+			if b, found := finra.Headline(bonds, time.Now().UTC()); found {
+				bondYieldPct, bondYieldChange, bondLabel = b.YieldPct, b.YieldChange, b.Label()
+			}
+		}
+
 		row := screenerRowDTO{
 			Symbol:             info.Symbol,
 			Name:               info.Name,
@@ -513,10 +551,14 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 				FreeCashflow:          freeCashflow,
 				NetDebtToMarketCapPct: netDebtToMarketCapPct,
 				CurrentRatio:          currentRatio,
+				BondYieldPct:          bondYieldPct,
 			}),
-			NetOpenMarket: netOpenMarket,
-			Note:          info.Note,
-			AITheme:       category.Theme(info.Symbol),
+			NetOpenMarket:   netOpenMarket,
+			BondYieldPct:    bondYieldPct,
+			BondYieldChange: bondYieldChange,
+			BondLabel:       bondLabel,
+			Note:            info.Note,
+			AITheme:         category.Theme(info.Symbol),
 		}
 		if ok {
 			row.Sector = companyData.Profile.Sector
@@ -603,6 +645,102 @@ func (s *Server) handleInsider(w http.ResponseWriter, r *http.Request) {
 		"fetchedAt": fetchedAt,
 	}); err != nil {
 		log.Printf("encoding /api/insider response: %v", err)
+	}
+}
+
+func (s *Server) handleBonds(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if !tickerRe.MatchString(symbol) {
+		http.Error(w, fmt.Sprintf("invalid symbol %q", symbol), http.StatusBadRequest)
+		return
+	}
+
+	bonds, fetchedAt, err := s.bonds(symbol)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	var headline string
+	if b, found := finra.Headline(bonds, time.Now().UTC()); found {
+		headline = b.Symbol
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"symbol":    symbol,
+		"bonds":     bonds,
+		"headline":  headline,
+		"fetchedAt": fetchedAt.Unix(),
+	}); err != nil {
+		log.Printf("encoding /api/bonds response: %v", err)
+	}
+}
+
+func (s *Server) bonds(symbol string) ([]finra.Bond, time.Time, error) {
+	bonds, fetchedAt, ok, err := s.store.Bonds(symbol)
+	if err != nil || ok {
+		return bonds, fetchedAt, err
+	}
+	name, err := s.store.SymbolName(symbol)
+	if err != nil {
+		log.Printf("looking up name for %s: %v", symbol, err)
+	}
+	if bonds, err = finra.Fetch(symbol, name); err != nil {
+		return nil, time.Time{}, err
+	}
+	if s.tracked(symbol) {
+		if err := s.store.SetBonds(symbol, bonds); err != nil {
+			log.Printf("storing bonds for %s: %v", symbol, err)
+		}
+	}
+	return bonds, time.Now(), nil
+}
+
+func (s *Server) handleBondHistory(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if !tickerRe.MatchString(symbol) {
+		http.Error(w, fmt.Sprintf("invalid symbol %q", symbol), http.StatusBadRequest)
+		return
+	}
+	bonds, _, err := s.bonds(symbol)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	want := r.URL.Query().Get("bond")
+	var bond finra.Bond
+	found := false
+	if want == "" {
+		bond, found = finra.Headline(bonds, time.Now().UTC())
+	} else {
+		for _, b := range bonds {
+			if b.Symbol == want {
+				bond, found = b, true
+				break
+			}
+		}
+	}
+	if !found {
+		http.Error(w, fmt.Sprintf("no bond %q for %s", want, symbol), http.StatusNotFound)
+		return
+	}
+
+	history, err := bondhist.Sync(s.store, bond)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"symbol":  symbol,
+		"bond":    bond.Symbol,
+		"label":   bond.Label(),
+		"history": history,
+	}); err != nil {
+		log.Printf("encoding /api/bonds/history response: %v", err)
 	}
 }
 
