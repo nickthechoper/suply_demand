@@ -49,6 +49,17 @@ function zonePill(row) {
   return `<span class="zone-pill ${side}">${label}</span>`;
 }
 
+function bondYieldCell(row) {
+  if (row.bondYieldPct === undefined || row.bondYieldPct === null) return '–';
+  const bp = row.bondYieldChange === undefined || row.bondYieldChange === null ? null : Math.round(row.bondYieldChange * 100);
+  const chg = bp === null ? '' : `<span class="yield-chg ${bp > 0 ? 'neg' : bp < 0 ? 'pos' : ''}">${bp > 0 ? '+' : ''}${bp}bp</span>`;
+  return `<a class="cell-link" href="chart.html?symbol=${encodeURIComponent(row.symbol)}#bonds" title="${escapeHtml(row.bondLabel)}">${fmt(row.bondYieldPct)}%</a>${chg}`;
+}
+
+function bondYieldClass(y) {
+  return y === undefined || y === null ? '' : y >= 15 ? 'yield-distress' : y >= 10 ? 'yield-high' : '';
+}
+
 function ratingLabel(key) {
   if (!key) return '–';
   return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -159,6 +170,7 @@ const COLUMNS = [
   { id: 'recommendationKey', label: 'Rating', cell: r => ratingLabel(r.recommendationKey) },
   { id: 'upsidePct', label: 'Target Upside', tdClass: r => r.upsidePct >= 0 ? 'pos' : 'neg', cell: r => r.upsidePct === undefined || r.upsidePct === null ? '–' : `${r.upsidePct >= 0 ? '+' : ''}${fmt(r.upsidePct)}%` },
   { id: 'netOpenMarket', label: 'Net Open-Market (12M)', title: 'Open-market insider purchases minus sales over the last 12 months', tdClass: r => r.netOpenMarket ? pctClass(r.netOpenMarket) : '', cell: r => `<a class="cell-link" href="insider.html?symbol=${encodeURIComponent(r.symbol)}">${fmtNetUsd(r.netOpenMarket)}</a>` },
+  { id: 'bondYieldPct', label: 'Bond Yield', title: "Highest yield to maturity among the company's straight (non-convertible) bonds traded in the last 14 days, from FINRA TRACE", tdClass: r => bondYieldClass(r.bondYieldPct), cell: r => bondYieldCell(r) },
   { id: 'flags', label: 'Flags', sortable: false, cell: r => flagBadges(r) },
   { id: 'note', label: 'Note', left: true, tdClass: () => 'note-cell', cell: r => noteCell(r) },
 ];

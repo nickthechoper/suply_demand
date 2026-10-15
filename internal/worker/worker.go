@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"supplydemand/internal/bondhist"
+	"supplydemand/internal/finra"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/store"
 	"supplydemand/internal/yahoo"
@@ -72,6 +74,7 @@ type Config struct {
 	FetchRange string
 	Pacing     time.Duration
 	AfterBars  func(symbol string)
+	AfterBonds func(symbol string)
 }
 
 func BackfillNames(st *store.Store, symbols []string) {
@@ -199,6 +202,7 @@ func oldestFirst(cfg Config, client *http.Client, crumb string, symbols []string
 			task{symbol, "fundamentals", ft.Fundamentals, func() outcome { return refreshFundamentals(cfg, client, crumb, symbol) }},
 			task{symbol, "company data", ft.CompanyData, func() outcome { return refreshCompanyData(cfg, client, crumb, symbol) }},
 			task{symbol, "insider trades", ft.Insider, func() outcome { return refreshInsiderTrades(cfg, symbol) }},
+			task{symbol, "bonds", ft.Bonds, func() outcome { return refreshBonds(cfg, symbol) }},
 		)
 	}
 
@@ -308,6 +312,34 @@ func refreshInsiderTrades(cfg Config, symbol string) outcome {
 		return failed
 	}
 	activity.Printf("worker: stored %d insider trades for %s", len(trades), symbol)
+	return fetched
+}
+
+func refreshBonds(cfg Config, symbol string) outcome {
+	name, err := cfg.Store.SymbolName(symbol)
+	if err != nil {
+		log.Printf("worker: looking up name for %s: %v", symbol, err)
+	}
+	bonds, err := finra.Fetch(symbol, name)
+	if err != nil {
+		log.Printf("worker: warning: could not fetch bonds for %s: %v", symbol, err)
+		return failed
+	}
+	if err := cfg.Store.SetBonds(symbol, bonds); err != nil {
+		log.Printf("worker: warning: could not store bonds for %s: %v", symbol, err)
+		return failed
+	}
+	activity.Printf("worker: stored %d bonds for %s", len(bonds), symbol)
+	if b, ok := finra.Headline(bonds, time.Now().UTC()); ok {
+		if history, err := bondhist.Sync(cfg.Store, b); err != nil {
+			log.Printf("worker: warning: could not update yield history for %s bond %s: %v", symbol, b.Symbol, err)
+		} else {
+			activity.Printf("worker: %d days of yield history for %s bond %s", len(history), symbol, b.Symbol)
+		}
+	}
+	if cfg.AfterBonds != nil {
+		cfg.AfterBonds(symbol)
+	}
 	return fetched
 }
 
