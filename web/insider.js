@@ -144,7 +144,6 @@ async function loadTracked() {
       .map(s => `<option value="${esc(s.symbol)}">${esc(s.name || '')}</option>`)
       .join('');
     updateChartLink();
-    if (!symbol) renderIntro();
   } catch (e) {
     console.error('loading tracked symbols failed', e);
   }
@@ -164,15 +163,65 @@ function bindSuggestions() {
   resultEl.querySelectorAll('.actions [data-symbol]').forEach(b => b.addEventListener('click', () => lookup(b.dataset.symbol)));
 }
 
-function renderIntro() {
-  destroyChart();
+let feedKind = 'market';
+
+function feedMatches(t) {
+  if (feedKind === 'buy') return t.code === 'P';
+  if (feedKind === 'sell') return t.code === 'S';
+  if (feedKind === 'market') return t.code === 'P' || t.code === 'S';
+  return true;
+}
+
+function renderFeed(json) {
+  const all = json.trades || [];
+  const shown = all.filter(feedMatches);
+  const kinds = [['market', 'Buys & sales'], ['buy', 'Buys'], ['sell', 'Sales'], ['all', 'All filings']];
+  const rows = shown.slice(0, 500).map(t => {
+    const meta = TYPES[t.code] || { label: t.type || t.code, kind: 'other', color: '#9aa4af' };
+    const market = meta.kind !== 'other';
+    const cls = market ? meta.kind : 'routine';
+    const date = esc(fmtDate(t.tradeDate));
+    return `<tr class="${cls}">
+      <td class="l"><span class="primary">${t.filingUrl ? `<a class="ext" href="${esc(t.filingUrl)}" target="_blank" rel="noopener">${date}</a>` : date}</span><span class="secondary">${esc(daysAgo(t.tradeDate))}</span></td>
+      <td class="l"><span class="primary"><a class="ext" href="insider.html?symbol=${encodeURIComponent(t.symbol)}"><b>${esc(t.symbol)}</b></a></span><span class="secondary">${esc(t.name || '')}</span></td>
+      <td class="l person"><span class="primary">${esc(t.insider)}</span><span class="secondary" title="${esc(t.title)}">${esc(t.title || '—')}</span></td>
+      <td class="l"><span class="type"><i class="dot" style="background:${meta.color}"></i>${esc(meta.label)}</span></td>
+      <td class="num fig ${market && isNum(t.qty) ? (t.qty > 0 ? 'pos' : 'neg') : ''}">${fmtSignedInt(t.qty)}</td>
+      <td class="num fig">${fmtUsd(t.price, 2)}</td>
+      <td class="num fig ${market ? (t.value < 0 ? 'neg' : 'pos') : ''}">${fmtUsd(t.value)}</td>
+    </tr>`;
+  }).join('');
   resultEl.innerHTML = `
-    <div class="note">
-      <h2>Look up insider activity for any ticker</h2>
-      <p>SEC Form 4 filings from OpenInsider: who bought or sold on the open market, plotted against the share price. Press <b>/</b> to jump to the search box.</p>
-      <div class="actions">${suggestionButtons()}</div>
-    </div>`;
-  bindSuggestions();
+    <section class="card" id="transactions">
+      <div class="card-head"><h3>Recent insider activity · ${periodLabel()}</h3><span class="count">${shown.length.toLocaleString('en-US')} of ${plural(all.length, 'filing')} · ${plural(json.tickers, 'tracked ticker')}</span></div>
+      <div class="toolbar">${kinds.map(([k, label]) => `<button type="button" class="chip" data-kind="${k}" aria-pressed="${k === feedKind}">${label}</button>`).join('')}</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="l"><button type="button">Date</button></th><th class="l"><button type="button">Ticker</button></th><th class="l"><button type="button">Insider</button></th><th class="l"><button type="button">Transaction</button></th><th><button type="button">Shares</button></th><th><button type="button">Price</button></th><th><button type="button">Value</button></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="empty">No filings in this period.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </section>
+    <p class="source">Source: OpenInsider (SEC Form 4) for tracked tickers${json.fetchedAt ? `, oldest refresh ${timeAgo(json.fetchedAt)}` : ''}.${shown.length > 500 ? ' Showing the 500 most recent.' : ''}</p>`;
+  resultEl.querySelectorAll('[data-kind]').forEach(b => b.addEventListener('click', () => {
+    feedKind = b.dataset.kind;
+    renderFeed(json);
+  }));
+}
+
+async function renderIntro() {
+  destroyChart();
+  symbol = '';
+  const id = ++requestId;
+  resultEl.innerHTML = '<div class="skeleton" aria-busy="true"><div class="status"><span class="spin"></span>Loading recent insider activity…</div></div>';
+  try {
+    const resp = await fetch(`/api/insider/recent?days=${Math.min(days, 365)}`);
+    if (id !== requestId) return;
+    if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
+    renderFeed(await resp.json());
+  } catch (e) {
+    if (id === requestId) resultEl.innerHTML = `<div class="note err"><h2>Couldn't load recent activity</h2><p>${esc(e.message)}</p></div>`;
+  }
 }
 
 function renderLoading() {
@@ -666,7 +715,7 @@ document.getElementById('lookup').addEventListener('submit', e => {
 periodEl.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
   days = Number(b.dataset.days);
   renderPeriod();
-  if (tickerEl.value.trim()) load();
+  if (tickerEl.value.trim()) load(); else renderIntro();
 }));
 document.addEventListener('keydown', e => {
   if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -680,6 +729,7 @@ document.addEventListener('keydown', e => {
 const params = new URLSearchParams(window.location.search);
 const requestedDays = Number(params.get('days'));
 if (requestedDays > 0 && requestedDays <= 3650) days = requestedDays;
+else if (!params.get('symbol')) days = 30;
 renderPeriod();
 renderRecent();
 loadTracked();
