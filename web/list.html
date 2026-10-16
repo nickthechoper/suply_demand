@@ -258,6 +258,9 @@
   #note-save:disabled { opacity: 0.6; cursor: default; }
   #empty-note { padding: var(--space-6); color: var(--muted); text-align: center; }
   .hidden { display: none !important; }
+  @media (max-width: 760px) {
+    header .page-nav { flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
+  }
 </style>
 </head>
 <body>
@@ -267,6 +270,7 @@
       <a class="nav-link" aria-current="page">List view</a>
       <a class="nav-link" id="chart-link" href="chart.html">Chart view</a>
       <a class="nav-link" id="insider-link" href="insider.html">Insider trades</a>
+      <a class="nav-link" href="japan.html">Japan flows</a>
     </nav>
   </header>
 

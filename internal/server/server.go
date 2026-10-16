@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"supplydemand/internal/boj"
 	"supplydemand/internal/bondhist"
 	"supplydemand/internal/category"
 	"supplydemand/internal/finra"
@@ -104,6 +105,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/note", s.handleNote)
 	mux.HandleFunc("/api/bonds", s.handleBonds)
 	mux.HandleFunc("/api/bonds/history", s.handleBondHistory)
+	mux.HandleFunc("/api/japan-flows", s.handleJapanFlows)
 	files := http.FileServer(http.Dir(s.config.WebDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
@@ -741,6 +743,18 @@ func (s *Server) handleBondHistory(w http.ResponseWriter, r *http.Request) {
 		"history": history,
 	}); err != nil {
 		log.Printf("encoding /api/bonds/history response: %v", err)
+	}
+}
+
+func (s *Server) handleJapanFlows(w http.ResponseWriter, r *http.Request) {
+	flows, err := boj.JapaneseDebtFlows()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(flows); err != nil {
+		log.Printf("encoding /api/japan-flows response: %v", err)
 	}
 }
 
