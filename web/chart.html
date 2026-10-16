@@ -322,6 +322,9 @@
   .filing-row .filing-type { color: var(--supply); font-weight: 600; min-width: 42px; }
   .filing-row .filing-date { color: var(--muted); min-width: 78px; }
   .filing-row .filing-title { flex: 1; }
+  @media (max-width: 760px) {
+    header .page-nav { flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
+  }
 </style>
 </head>
 <body>
@@ -340,6 +343,7 @@
       <a class="nav-link" id="list-link" href="list.html">List view</a>
       <a class="nav-link" aria-current="page">Chart view</a>
       <a class="nav-link" id="insider-link" href="insider.html">Insider trades</a>
+      <a class="nav-link" href="japan.html">Japan flows</a>
     </nav>
   </header>
 

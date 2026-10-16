@@ -412,7 +412,7 @@
   @media (max-width: 760px) {
     header { flex-wrap: wrap; padding: var(--space-3) var(--space-4); }
     header { height: auto; }
-    header .page-nav { margin-left: 0; }
+    header .page-nav { margin-left: 0; flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
     main { padding: var(--space-4); }
     .kpis, .sk-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .verdict { flex-direction: column; align-items: flex-start; gap: var(--space-2); }
@@ -434,6 +434,7 @@
       <a class="nav-link" id="list-link" href="list.html">List view</a>
       <a class="nav-link" id="chart-link" href="chart.html">Chart view</a>
       <a class="nav-link" aria-current="page">Insider trades</a>
+      <a class="nav-link" href="japan.html">Japan flows</a>
     </nav>
   </header>
 
