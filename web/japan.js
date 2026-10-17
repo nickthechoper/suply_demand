@@ -16,11 +16,16 @@ const RANGES = [
   { label: 'All', months: 0 },
 ];
 const AXIS_WIDTH = 52;
+const TOP_LINES = 6;
+const POS = token('--pos');
+const NEG = token('--neg');
 
 let flows = null;
 let charts = [];
 let range = 0;
 let view = 'chart';
+let cumRange = 0;
+let cumCharts = [];
 
 function monthLabel(ym, long) {
   const [y, m] = ym.split('-');
@@ -124,8 +129,30 @@ function render() {
       </div>
       <div class="table-wrap hidden" id="table-wrap"></div>
     </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>Where the money accumulated</h3>
+        <span class="hint" id="cum-hint"></span>
+        <div class="tools">
+          <div class="segmented" id="cum-range" role="group" aria-label="Accumulation period">
+            ${RANGES.map((r) => `<button type="button" data-months="${r.months}" aria-pressed="${r.months === cumRange}">${r.label}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="cum-body">
+        <div>
+          <div class="panel-title">Ranking <span>net purchases added up, by country of issuer</span></div>
+          <div class="panel cum"><canvas id="chart-rank" aria-label="Countries ranked by Japanese cumulative net purchases of long-term debt securities"></canvas></div>
+        </div>
+        <div>
+          <div class="panel-title">Running total <span>${TOP_LINES} largest</span></div>
+          <div class="legend inline" id="cum-legend"></div>
+          <div class="panel cum"><canvas id="chart-cum" aria-label="Running total of Japanese net purchases of long-term debt securities by country"></canvas></div>
+        </div>
+      </div>
+    </div>
     <p class="source">
-      Other EA = ${esc(flows.otherEA.join(', '))}. Source: Bank of Japan / Ministry of Finance balance of payments (BPM6),
+      Other EA = ${esc(flows.otherEA.map((s) => s.name).join(', '))}. Source: Bank of Japan / Ministry of Finance balance of payments (BPM6),
       portfolio investment assets, long-term debt securities, net, by country of issuer. Monthly data starts January 2014, so the 12-month sum starts ${monthLabel(flows.months[0], true)}.
       Fetched ${new Date(flows.fetchedAt * 1000).toLocaleString()}.
     </p>`;
@@ -148,8 +175,136 @@ function render() {
     document.getElementById('table-wrap').classList.toggle('hidden', view !== 'table');
   });
 
+  document.getElementById('cum-range').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    cumRange = +b.dataset.months;
+    document.querySelectorAll('#cum-range button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    drawCumulative();
+  });
+
   drawCharts();
   renderTable();
+  drawCumulative();
+}
+
+function cumStart() {
+  return cumRange > 0 ? Math.max(0, flows.months.length - cumRange) : 0;
+}
+
+function cumSince(series) {
+  const start = cumStart();
+  const base = start > 0 ? series.values[start - 1] : 0;
+  return series.values.map((v, i) => (i < start || v == null || base == null ? null : Math.round((v - base) * 100) / 100));
+}
+
+const barValueLabels = {
+  id: 'barValueLabels',
+  afterDatasetsDraw(c) {
+    const { ctx } = c;
+    const meta = c.getDatasetMeta(0);
+    ctx.save();
+    ctx.font = '12px -apple-system, Segoe UI, Roboto, Arial, sans-serif';
+    ctx.textBaseline = 'middle';
+    meta.data.forEach((bar, i) => {
+      const v = c.data.datasets[0].data[i];
+      if (v == null) return;
+      ctx.fillStyle = MUTED;
+      ctx.textAlign = v < 0 ? 'right' : 'left';
+      ctx.fillText(yen(v), bar.x + (v < 0 ? -6 : 6), bar.y);
+    });
+    ctx.restore();
+  },
+};
+
+function drawCumulative() {
+  cumCharts.forEach((c) => c.destroy());
+  const labels = flows.months;
+  const start = cumStart();
+  const end = labels.length - 1;
+  const since = start > 0 ? monthLabel(labels[start], true) : monthLabel(flows.start, true);
+  document.getElementById('cum-hint').textContent = `¥100bn, added up since ${since} to ${monthLabel(labels[end], true)} · positive = money in, negative = money taken out`;
+
+  const ranked = flows.cumulative
+    .map((s) => {
+      const values = cumSince(s);
+      return { name: s.name, values, total: values[lastIndex(values)] ?? null };
+    })
+    .sort((a, b) => (b.total ?? -Infinity) - (a.total ?? -Infinity));
+
+  const tooltip = baseOptions(true).plugins.tooltip;
+  const rank = new Chart(document.getElementById('chart-rank'), {
+    type: 'bar',
+    data: {
+      labels: ranked.map((r) => r.name),
+      datasets: [{
+        label: 'Accumulated',
+        data: ranked.map((r) => r.total),
+        backgroundColor: ranked.map((r) => (r.total < 0 ? NEG : POS)),
+        borderRadius: 3,
+        barPercentage: 0.8,
+        categoryPercentage: 0.9,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      layout: { padding: { left: 56, right: 64 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...tooltip,
+          callbacks: {
+            title: (items) => items[0].label,
+            label: (item) => ` ${fmt(item.raw)}  (${yen(item.raw)}) since ${since}`,
+            labelColor: (item) => {
+              const color = item.raw < 0 ? NEG : POS;
+              return { borderColor: color, backgroundColor: color, borderWidth: 0, borderRadius: 2 };
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: {
+            color: (ctx) => (ctx.tick && ctx.tick.value === 0 ? MUTED : 'rgba(255, 255, 255, 0.05)'),
+            lineWidth: (ctx) => (ctx.tick && ctx.tick.value === 0 ? 1.5 : 1),
+            drawTicks: false,
+          },
+          border: { display: false },
+          ticks: { color: MUTED, padding: 6, maxTicksLimit: 6, callback: (v) => v.toLocaleString('en-US') },
+        },
+        y: {
+          grid: { display: false },
+          border: { display: false },
+          ticks: { color: TEXT, autoSkip: false },
+        },
+      },
+    },
+    plugins: [barValueLabels],
+  });
+
+  const top = [...ranked]
+    .filter((r) => r.total != null)
+    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total))
+    .slice(0, TOP_LINES);
+  document.getElementById('cum-legend').innerHTML = top
+    .map((r, i) => `<span><i class="line" style="background:${SERIES_COLORS[i]}"></i>${esc(r.name)}</span>`)
+    .join('');
+
+  const lineOptions = baseOptions(true);
+  lineOptions.scales.x.min = start;
+  lineOptions.scales.x.max = end;
+  lineOptions.plugins.tooltip.itemSort = (a, b) => b.raw - a.raw;
+  lineOptions.plugins.tooltip.callbacks.title = (items) => `${since} to ${monthLabel(labels[items[0].dataIndex], true)}`;
+  const lines = new Chart(document.getElementById('chart-cum'), {
+    data: { labels, datasets: top.map((r, i) => lineDataset(r.name, r.values, SERIES_COLORS[i])) },
+    options: lineOptions,
+  });
+
+  cumCharts = [rank, lines];
 }
 
 function visibleStart() {
@@ -215,6 +370,10 @@ function baseOptions(showX) {
         callbacks: {
           title: (items) => `12 months to ${monthLabel(labels[items[0].dataIndex], true)}`,
           label: (item) => ` ${item.dataset.label}: ${fmt(item.raw)}  (${yen(item.raw)})`,
+          afterLabel: (item) => (item.dataset.type === 'bar' && flows.euroArea[item.datasetIndex]?.key === 'OTHER' ? flows.otherEA : [])
+            .filter((s) => s.values[item.dataIndex] != null)
+            .sort((a, b) => Math.abs(b.values[item.dataIndex]) - Math.abs(a.values[item.dataIndex]))
+            .map((s) => `      ${s.name}: ${fmt(s.values[item.dataIndex])}`),
           labelColor: (item) => {
             const color = item.dataset.type === 'bar' ? item.dataset.backgroundColor : item.dataset.borderColor;
             return { borderColor: color, backgroundColor: color, borderWidth: 0, borderRadius: 2 };
@@ -315,16 +474,16 @@ function drawCharts() {
 
 function renderTable() {
   const start = visibleStart();
-  const cols = [...flows.euroArea, flows.totalEA, flows.us];
+  const cols = [...flows.euroArea, ...flows.otherEA, flows.totalEA, flows.us];
   const rows = [];
   for (let i = flows.months.length - 1; i >= start; i--) {
     rows.push(`<tr><td class="l">${monthLabel(flows.months[i], true)}</td>${cols
-      .map((s) => `<td class="num ${s === flows.totalEA || s === flows.us ? 'strong ' + signClass(s.values[i]) : ''}">${fmt(s.values[i])}</td>`)
+      .map((s) => `<td class="num ${s === flows.totalEA || s === flows.us ? 'strong ' + signClass(s.values[i]) : flows.otherEA.includes(s) ? 'sub' : ''}">${fmt(s.values[i])}</td>`)
       .join('')}</tr>`);
   }
   document.getElementById('table-wrap').innerHTML = `
     <table>
-      <thead><tr><th class="l">12 months to</th>${cols.map((s) => `<th>${esc(s.name)}</th>`).join('')}</tr></thead>
+      <thead><tr><th class="l">12 months to</th>${cols.map((s) => `<th${flows.otherEA.includes(s) ? ' class="sub" title="Part of Other EA"' : ''}>${esc(s.name)}</th>`).join('')}</tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table>`;
 }

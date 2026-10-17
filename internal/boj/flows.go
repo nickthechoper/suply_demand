@@ -55,15 +55,17 @@ type Series struct {
 }
 
 type Flows struct {
-	Months    []string `json:"months"`
-	EuroArea  []Series `json:"euroArea"`
-	TotalEA   Series   `json:"totalEA"`
-	US        Series   `json:"us"`
-	OtherEA   []string `json:"otherEA"`
-	Unit      string   `json:"unit"`
-	Window    int      `json:"window"`
-	FetchedAt int64    `json:"fetchedAt"`
-	Source    string   `json:"source"`
+	Months     []string `json:"months"`
+	EuroArea   []Series `json:"euroArea"`
+	TotalEA    Series   `json:"totalEA"`
+	US         Series   `json:"us"`
+	OtherEA    []Series `json:"otherEA"`
+	Cumulative []Series `json:"cumulative"`
+	Start      string   `json:"start"`
+	Unit       string   `json:"unit"`
+	Window     int      `json:"window"`
+	FetchedAt  int64    `json:"fetchedAt"`
+	Source     string   `json:"source"`
 }
 
 var (
@@ -133,14 +135,38 @@ func Build(months []string, monthly map[string][]*float64) *Flows {
 	}
 	var others [][]*float64
 	for _, c := range OtherEuroArea {
-		others = append(others, trim(sums[c.Code]))
-		out.OtherEA = append(out.OtherEA, c.Name)
+		v := trim(sums[c.Code])
+		others = append(others, v)
+		out.OtherEA = append(out.OtherEA, Series{Key: c.Code, Name: c.Name, Values: v})
 	}
 	other := add(others)
 	parts = append(parts, other)
 	out.EuroArea = append(out.EuroArea, Series{Key: "OTHER", Name: "Other EA", Values: other})
 	out.TotalEA = Series{Key: "EA", Name: "Total EA", Values: add(parts)}
 	out.US = Series{Key: US.Code, Name: US.Name, Values: trim(sums[US.Code])}
+	for _, c := range append(append([]Country{US}, Featured...), OtherEuroArea...) {
+		out.Cumulative = append(out.Cumulative, Series{Key: c.Code, Name: c.Name, Values: trim(runningSum(monthly[c.Code]))})
+	}
+	if len(months) > 0 {
+		out.Start = formatMonths(months[:1])[0]
+	}
+	return out
+}
+
+func runningSum(values []*float64) []*float64 {
+	if values == nil {
+		return nil
+	}
+	out := make([]*float64, len(values))
+	var sum float64
+	for i, v := range values {
+		if v == nil {
+			break
+		}
+		sum += *v
+		s := round(sum / 1000)
+		out[i] = &s
+	}
 	return out
 }
 

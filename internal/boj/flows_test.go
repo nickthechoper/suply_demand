@@ -93,3 +93,36 @@ func TestBuildLeavesGapsWhenMonthMissing(t *testing.T) {
 		t.Error("DE should be unaffected by an IT gap")
 	}
 }
+
+func TestBuildCumulativeRunsFromFirstMonth(t *testing.T) {
+	csv := fixture(14, func(code string, i int) string {
+		switch code {
+		case "US":
+			return "-500"
+		case "DE":
+			return fmt.Sprint(100 * (i + 1))
+		}
+		return "250"
+	})
+	months, data, err := ParseCSV(strings.NewReader(csv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := Build(months, data)
+
+	if f.Start != "2014-01" {
+		t.Errorf("start = %q, want 2014-01", f.Start)
+	}
+	if len(f.Cumulative) != 13 || f.Cumulative[0].Key != "US" || f.Cumulative[1].Key != "DE" {
+		t.Fatalf("cumulative keys = %v", f.Cumulative)
+	}
+	if got := *f.Cumulative[1].Values[0]; got != 7.8 {
+		t.Errorf("DE cumulative at Dec 2014 = %v, want 7.8", got)
+	}
+	if got := *f.Cumulative[1].Values[2]; got != 10.5 {
+		t.Errorf("DE cumulative at Feb 2015 = %v, want 10.5", got)
+	}
+	if got := *f.Cumulative[0].Values[2]; got != -7 {
+		t.Errorf("US cumulative at Feb 2015 = %v, want -7", got)
+	}
+}

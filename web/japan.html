@@ -132,6 +132,11 @@
   .panel-title span { color: var(--faint); font-weight: 400; margin-left: var(--space-1); }
   .panel ~ .panel-title { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
 
+  .card + .card { margin-top: var(--space-3); }
+  .cum-body { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--space-4); padding: var(--space-3); }
+  .panel.cum { height: 420px; }
+  .legend.inline { padding: 0 0 var(--space-2) var(--space-2); }
+
   .table-wrap { overflow: auto; max-height: 620px; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   thead th {
@@ -152,6 +157,8 @@
   th.l, td.l { text-align: left; }
   tbody tr:hover td { background: rgba(33, 87, 243, 0.08); }
   td.strong { font-weight: 600; }
+  td.sub { color: var(--muted); }
+  th.sub { font-weight: 400; font-style: italic; }
 
   .source { color: var(--faint); font-size: 12px; margin-top: var(--space-3); }
 
@@ -168,6 +175,8 @@
     main { padding: var(--space-4); }
     .kpis { grid-template-columns: 1fr; }
     .chart-body { height: 540px; }
+    .cum-body { grid-template-columns: 1fr; }
+    .panel.cum { height: 360px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .spin { animation: none; }
