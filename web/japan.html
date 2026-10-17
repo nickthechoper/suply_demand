@@ -4,7 +4,6 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Japan Bond Flows — Supply &amp; Demand Dashboard</title>
-<script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
 <style>
   :root {
     --bg: #0e1117;
@@ -18,13 +17,8 @@
     --accent: #6f96ff;
     --pos: #4fd1c5;
     --neg: #ef8b88;
-
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-    --series-6: #008300;
+    --pos-rgb: 79, 209, 197;
+    --neg-rgb: 239, 139, 136;
 
     --space-1: 4px;
     --space-2: 8px;
@@ -73,7 +67,7 @@
   header .nav-link:hover { border-color: var(--supply); }
   header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; cursor: default; user-select: none; }
 
-  main { max-width: 1440px; margin: 0 auto; padding: var(--space-5) var(--space-6) var(--space-6); }
+  main { max-width: 1600px; margin: 0 auto; padding: var(--space-5) var(--space-6) var(--space-6); }
 
   .title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-4); }
   .title-row h2 { margin: 0; font-size: 22px; }
@@ -98,12 +92,7 @@
   }
   .card-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
   .card-head .hint { color: var(--faint); font-size: 12px; }
-  .card-head .tools { margin-left: auto; display: flex; gap: var(--space-2); }
-
-  .legend { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4) 0; font-size: 12px; color: var(--muted); }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
-  .legend i.line { height: 2px; width: 14px; border-radius: 1px; }
+  .card-head .tools { margin-left: auto; display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
   .segmented {
     display: inline-flex;
@@ -123,42 +112,59 @@
   }
   .segmented button:hover { color: var(--text); }
   .segmented button[aria-pressed="true"] { background: var(--supply); color: #fff; font-weight: 600; }
+  #filter {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    width: 160px;
+  }
+  #filter:focus { outline: none; border-color: var(--supply); }
 
-  .chart-body { display: flex; flex-direction: column; height: 660px; padding: var(--space-3); }
-  .panel { position: relative; min-height: 0; }
-  .panel.ea { flex: 3; }
-  .panel.us { flex: 2; }
-  .panel-title { font-size: 12px; font-weight: 600; color: var(--text); padding: 0 0 var(--space-1) var(--space-2); }
-  .panel-title span { color: var(--faint); font-weight: 400; margin-left: var(--space-1); }
-  .panel ~ .panel-title { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
-
-  .card + .card { margin-top: var(--space-3); }
-  .cum-body { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--space-4); padding: var(--space-3); }
-  .panel.cum { height: 420px; }
-  .legend.inline { padding: 0 0 var(--space-2) var(--space-2); }
-
-  .table-wrap { overflow: auto; max-height: 620px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .table-wrap { overflow: auto; max-height: calc(100vh - 300px); min-height: 320px; scrollbar-color: #3a424d var(--panel); }
+  table { border-collapse: separate; border-spacing: 0; font-size: 13px; }
   thead th {
     position: sticky;
     top: 0;
+    z-index: 2;
     background: var(--panel);
     text-align: right;
     font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: var(--muted);
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
   }
-  tbody td { padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+  thead th:hover, thead th[aria-sort] { color: var(--text); }
+  thead th[aria-sort="descending"]::after { content: " ↓"; }
+  thead th[aria-sort="ascending"]::after { content: " ↑"; }
+  thead th.month { font-weight: 400; min-width: 58px; }
+  thead th.month.jan { color: var(--text); }
+  tbody td { padding: 6px var(--space-3); border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
   th.l, td.l { text-align: left; }
-  tbody tr:hover td { background: rgba(33, 87, 243, 0.08); }
-  td.strong { font-weight: 600; }
-  td.sub { color: var(--muted); }
-  th.sub { font-weight: 400; font-style: italic; }
+  tbody tr:hover td { box-shadow: inset 0 0 0 999px rgba(33, 87, 243, 0.08); }
+  .sticky { position: sticky; left: 0; z-index: 1; background: var(--panel); border-right: 1px solid var(--border); min-width: 200px; }
+  thead th.sticky { z-index: 3; }
+  td.name .sub { display: block; color: var(--faint); font-size: 11px; line-height: 1.2; }
+  tr.total td { font-weight: 700; background-color: var(--panel-2); }
+  tr.total td.sticky { background: var(--panel-2); }
+  td.summary { font-weight: 600; }
+  td.divider, th.divider { border-right: 1px solid var(--border); }
+  td.muted { color: var(--faint); }
+  td.month.empty { color: var(--faint); }
+
+  .table-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); color: var(--faint); font-size: 12px; }
+  .swatch { display: inline-block; width: 28px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+  .swatch.pos { background: linear-gradient(90deg, rgba(var(--pos-rgb), 0.08), rgba(var(--pos-rgb), 0.6)); }
+  .swatch.neg { background: linear-gradient(90deg, rgba(var(--neg-rgb), 0.08), rgba(var(--neg-rgb), 0.6)); }
+  #small-note { flex-basis: 100%; color: var(--muted); }
+  .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: underline; }
+  #empty { padding: var(--space-6); color: var(--muted); text-align: center; }
 
   .source { color: var(--faint); font-size: 12px; margin-top: var(--space-3); }
 
@@ -174,9 +180,8 @@
     header .page-nav { margin-left: 0; flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
     main { padding: var(--space-4); }
     .kpis { grid-template-columns: 1fr; }
-    .chart-body { height: 540px; }
-    .cum-body { grid-template-columns: 1fr; }
-    .panel.cum { height: 360px; }
+    .card-head .tools { margin-left: 0; }
+    .sticky { min-width: 140px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .spin { animation: none; }
@@ -196,7 +201,7 @@
 
   <main>
     <div class="title-row">
-      <h2>Are Japanese investors going back home?</h2>
+      <h2>Where is Japanese money going?</h2>
       <span class="period" id="period"></span>
     </div>
 

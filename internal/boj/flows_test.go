@@ -6,6 +6,32 @@ import (
 	"testing"
 )
 
+type series struct {
+	code, label string
+}
+
+var fixtureSeries = []series{
+	{seriesCode + "AS", "Asia"},
+	{seriesCode + "CN", "P.R. China"},
+	{seriesCode + "NA", "North America"},
+	{seriesCode + "US", "U.S.A."},
+	{seriesCode + "EP", "Europe"},
+	{seriesCode + "DE", "Germany"},
+	{seriesCode + "FR", "France"},
+	{seriesCode + "NL", "Netherlands"},
+	{seriesCode + "IT", "Italy"},
+	{seriesCode + "BE", "Belgium"},
+	{seriesCode + "LX", "Luxembourg"},
+	{seriesCode + "CH", "Switzerland"},
+	{seriesCode + "ES", "Spain"},
+	{seriesCode + "IE", "Ireland"},
+	{seriesCode + "AT", "Austria"},
+	{seriesCode + "FI", "Finland"},
+	{seriesCode + "PT", "Portugal"},
+	{seriesCode + "GR", "Greece"},
+	{seriesCode + "EU", "EU"},
+}
+
 func fixture(months int, value func(code string, i int) string) string {
 	var b strings.Builder
 	b.WriteString(",,,,201312")
@@ -13,116 +39,94 @@ func fixture(months int, value func(code string, i int) string) string {
 		fmt.Fprintf(&b, ",%d%02d", 2014+i/12, i%12+1)
 	}
 	b.WriteString(",209901\n")
-	b.WriteString(`BPPI6D3N9XX,"BPM6","Other",unit,,1` + strings.Repeat(",1", months-1) + ",\n")
-	for _, c := range append(append([]Country{US}, Featured...), OtherEuroArea...) {
-		fmt.Fprintf(&b, `%s%s,"BPM6","%s/Net","100 million Yen",`, seriesCode, c.Code, c.Name)
+	fmt.Fprintf(&b, `%s,"BPM6","Portfolio Investment Assets/Long-term debt securities/Net","100 million Yen",`, totalCode)
+	for i := 0; i < months; i++ {
+		b.WriteString("," + value("ALL", i))
+	}
+	b.WriteString(",\n")
+	b.WriteString(`BPPI6D3P9US,"BPM6","Portfolio Investment Assets/Long-term debt securities/U.S.A./Acquisition","100 million Yen",,1` + strings.Repeat(",1", months-1) + ",\n")
+	for _, s := range fixtureSeries {
+		fmt.Fprintf(&b, `%s,"BPM6","Portfolio Investment Assets/Long-term debt securities/%s/Net","100 million Yen",`, s.code, s.label)
 		for i := 0; i < months; i++ {
-			b.WriteString("," + value(c.Code, i))
+			b.WriteString("," + value(strings.TrimPrefix(s.code, seriesCode), i))
 		}
 		b.WriteString(",\n")
 	}
 	return b.String()
 }
 
-func TestParseCSVTrimsEmptyColumns(t *testing.T) {
-	months, data, err := ParseCSV(strings.NewReader(fixture(14, func(string, int) string { return "1000" })))
-	if err != nil {
-		t.Fatal(err)
+func rowByCode(f *Flows, code string) *Row {
+	for i := range f.Rows {
+		if f.Rows[i].Code == code {
+			return &f.Rows[i]
+		}
 	}
-	if len(months) != 14 || months[0] != "201401" || months[13] != "201502" {
-		t.Fatalf("months = %v", months)
-	}
-	if len(data) != 13 || len(data["DE"]) != 14 {
-		t.Fatalf("got %d series, DE has %d values", len(data), len(data["DE"]))
-	}
+	return nil
 }
 
-func TestBuildRollingSumsAndEuroAreaTotal(t *testing.T) {
-	csv := fixture(14, func(code string, i int) string {
-		switch code {
-		case "US":
-			return "-500"
-		case "DE":
-			return fmt.Sprint(100 * (i + 1))
-		}
-		return "250"
-	})
-	months, data, err := ParseCSV(strings.NewReader(csv))
+func TestParseCSVTrimsEmptyMonthsAndConvertsToBillions(t *testing.T) {
+	f, err := ParseCSV(strings.NewReader(fixture(14, func(string, int) string { return "1234" })))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := Build(months, data)
-
-	if len(f.Months) != 3 || f.Months[0] != "2014-12" || f.Months[2] != "2015-02" {
+	if len(f.Months) != 14 || f.Months[0] != "2014-01" || f.Months[13] != "2015-02" {
 		t.Fatalf("months = %v", f.Months)
 	}
-	if got := *f.US.Values[0]; got != -6 {
-		t.Errorf("US 12m sum = %v, want -6", got)
-	}
-	if got := *f.EuroArea[0].Values[0]; got != 7.8 {
-		t.Errorf("DE first 12m sum = %v, want 7.8", got)
-	}
-	if got := *f.EuroArea[0].Values[2]; got != 10.2 {
-		t.Errorf("DE last 12m sum = %v, want 10.2", got)
-	}
-	other := f.EuroArea[len(f.EuroArea)-1]
-	if other.Key != "OTHER" || *other.Values[0] != 21 {
-		t.Errorf("other EA = %s %v, want OTHER 21", other.Key, *other.Values[0])
-	}
-	if got := *f.TotalEA.Values[0]; got != 7.8+12+21 {
-		t.Errorf("total EA = %v, want %v", got, 7.8+12+21)
+	us := rowByCode(f, "US")
+	if us == nil || len(us.Values) != 14 || *us.Values[0] != 123.4 {
+		t.Fatalf("US row = %+v", us)
 	}
 }
 
-func TestBuildLeavesGapsWhenMonthMissing(t *testing.T) {
-	csv := fixture(13, func(code string, i int) string {
-		if code == "IT" && i == 5 {
+func TestParseCSVClassifiesRowsAndAssignsRegions(t *testing.T) {
+	f, err := ParseCSV(strings.NewReader(fixture(2, func(string, int) string { return "10" })))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		code, name, kind, region string
+	}{
+		{"ALL", "All countries", KindTotal, ""},
+		{"AS", "Asia", KindRegion, ""},
+		{"CN", "China", KindCountry, "Asia"},
+		{"US", "United States", KindCountry, "North America"},
+		{"CH", "Switzerland", KindCountry, "Europe"},
+		{"EU", "EU", KindGroup, ""},
+		{"EA", "Euro area (12)", KindGroup, ""},
+	}
+	for _, c := range cases {
+		r := rowByCode(f, c.code)
+		if r == nil {
+			t.Errorf("missing row %s", c.code)
+			continue
+		}
+		if r.Name != c.name || r.Kind != c.kind || r.Region != c.region {
+			t.Errorf("%s = {%q %q %q}, want {%q %q %q}", c.code, r.Name, r.Kind, r.Region, c.name, c.kind, c.region)
+		}
+	}
+	if rowByCode(f, "P9US") != nil || len(f.Rows) != len(fixtureSeries)+2 {
+		t.Errorf("got %d rows, want only net series plus total and euro area", len(f.Rows))
+	}
+}
+
+func TestEuroAreaSumsMembersAndLeavesGaps(t *testing.T) {
+	f, err := ParseCSV(strings.NewReader(fixture(3, func(code string, i int) string {
+		if code == "IT" && i == 1 {
 			return ""
 		}
-		return "100"
-	})
-	months, data, err := ParseCSV(strings.NewReader(csv))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := Build(months, data)
-	if f.EuroArea[3].Values[0] != nil || f.TotalEA.Values[0] != nil {
-		t.Error("expected nil when a month in the window is missing")
-	}
-	if f.EuroArea[0].Values[0] == nil {
-		t.Error("DE should be unaffected by an IT gap")
-	}
-}
-
-func TestBuildCumulativeRunsFromFirstMonth(t *testing.T) {
-	csv := fixture(14, func(code string, i int) string {
-		switch code {
-		case "US":
-			return "-500"
-		case "DE":
-			return fmt.Sprint(100 * (i + 1))
+		if code == "CH" {
+			return "9990"
 		}
-		return "250"
-	})
-	months, data, err := ParseCSV(strings.NewReader(csv))
+		return "100"
+	})))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := Build(months, data)
-
-	if f.Start != "2014-01" {
-		t.Errorf("start = %q, want 2014-01", f.Start)
+	ea := rowByCode(f, "EA")
+	if got := *ea.Values[0]; got != 120 {
+		t.Errorf("euro area = %v, want 120 (12 members x 10bn, Switzerland excluded)", got)
 	}
-	if len(f.Cumulative) != 13 || f.Cumulative[0].Key != "US" || f.Cumulative[1].Key != "DE" {
-		t.Fatalf("cumulative keys = %v", f.Cumulative)
-	}
-	if got := *f.Cumulative[1].Values[0]; got != 7.8 {
-		t.Errorf("DE cumulative at Dec 2014 = %v, want 7.8", got)
-	}
-	if got := *f.Cumulative[1].Values[2]; got != 10.5 {
-		t.Errorf("DE cumulative at Feb 2015 = %v, want 10.5", got)
-	}
-	if got := *f.Cumulative[0].Values[2]; got != -7 {
-		t.Errorf("US cumulative at Feb 2015 = %v, want -7", got)
+	if ea.Values[1] != nil {
+		t.Error("euro area should be empty when a member is missing that month")
 	}
 }
