@@ -19,6 +19,7 @@ import (
 	"supplydemand/internal/finra"
 	"supplydemand/internal/openinsider"
 	"supplydemand/internal/store"
+	"supplydemand/internal/tic"
 	"supplydemand/internal/yahoo"
 	"supplydemand/internal/zones"
 )
@@ -107,6 +108,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/bonds", s.handleBonds)
 	mux.HandleFunc("/api/bonds/history", s.handleBondHistory)
 	mux.HandleFunc("/api/japan-flows", s.handleJapanFlows)
+	mux.HandleFunc("/api/us-flows", s.handleUSFlows)
 	files := http.FileServer(http.Dir(s.config.WebDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
@@ -788,6 +790,18 @@ func (s *Server) handleJapanFlows(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(flows); err != nil {
 		log.Printf("encoding /api/japan-flows response: %v", err)
+	}
+}
+
+func (s *Server) handleUSFlows(w http.ResponseWriter, r *http.Request) {
+	flows, err := tic.USForeignBondFlows()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(flows); err != nil {
+		log.Printf("encoding /api/us-flows response: %v", err)
 	}
 }
 
