@@ -1,5 +1,7 @@
 const resultEl = document.getElementById('result');
 const periodEl = document.getElementById('period');
+const titleEl = document.getElementById('title');
+const investorEl = document.getElementById('investor');
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const RANGES = [
@@ -13,10 +15,30 @@ const VIEWS = [
   { kind: 'region', label: 'Regions' },
   { kind: 'group', label: 'Groups' },
 ];
+const INVESTORS = {
+  jp: {
+    endpoint: '/api/japan-flows',
+    currency: '¥',
+    adjective: 'Japanese',
+    investors: 'Japanese investors',
+    loading: 'Downloading Bank of Japan balance of payments data…',
+    source: 'Bank of Japan / Ministry of Finance balance of payments (BPM6), portfolio investment assets, long-term debt securities, net, by country of issuer. Euro area (12) is the sum of the twelve euro-area members BOJ reports separately. Blank months (·) are not published by BOJ.',
+  },
+  us: {
+    endpoint: '/api/us-flows',
+    currency: '$',
+    adjective: 'American',
+    investors: 'US residents',
+    loading: 'Downloading US Treasury TIC data…',
+    source: 'U.S. Treasury International Capital (TIC) system, SLT table 4: US residents’ purchases minus sales of foreign government and corporate long-term bonds, by country of issuer. Data by issuer start in February 2023, when Treasury replaced TIC Form S; earlier Form S data were by country of transaction and are not comparable, so they are not shown.',
+  },
+};
 const PREFS_KEY = 'japan.prefs';
 const HIDE_SMALLEST = 10;
 
+let investor = 'jp';
 let flows = null;
+const cache = {};
 let range = 12;
 let view = 'country';
 let query = '';
@@ -26,6 +48,7 @@ let showSmall = false;
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+    if (INVESTORS[p.investor]) investor = p.investor;
     if (RANGES.some((r) => r.months === p.range)) range = p.range;
     if (VIEWS.some((v) => v.kind === p.view)) view = p.view;
     if (p.sort && typeof p.sort.key === 'string' && !p.sort.key.startsWith('m:')) sort = p.sort;
@@ -34,7 +57,7 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ range, view, sort: sort.key.startsWith('m:') ? { key: 'net', dir: -1 } : sort }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ investor, range, view, sort: sort.key.startsWith('m:') ? { key: 'net', dir: -1 } : sort }));
   } catch {}
 }
 
@@ -54,7 +77,8 @@ function num(v) {
 function money(v) {
   if (v == null) return '—';
   const a = Math.abs(v);
-  const s = a >= 1000 ? `¥${(a / 1000).toFixed(1)}tn` : `¥${a.toFixed(0)}bn`;
+  const c = INVESTORS[investor].currency;
+  const s = a >= 1000 ? `${c}${(a / 1000).toFixed(1)}tn` : `${c}${a.toFixed(a >= 10 ? 0 : 1)}bn`;
   return `${v < 0 ? '−' : '+'}${s}`;
 }
 
@@ -95,12 +119,25 @@ function stats(row) {
   };
 }
 
+function rangeAvailable(months) {
+  return months === 0 || months <= flows.months.length;
+}
+
 async function load() {
-  loadPrefs();
+  const cfg = INVESTORS[investor];
+  investorEl.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.investor === investor)));
+  titleEl.textContent = `Where is ${cfg.adjective} money going?`;
   try {
-    const res = await fetch('/api/japan-flows');
-    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-    flows = await res.json();
+    if (!cache[investor]) {
+      periodEl.textContent = '';
+      resultEl.innerHTML = `<div class="note"><span class="spin"></span>${esc(cfg.loading)}</div>`;
+      const res = await fetch(cfg.endpoint);
+      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+      cache[investor] = await res.json();
+    }
+    flows = cache[investor];
+    if (!rangeAvailable(range)) range = 12;
+    if (sort.key.startsWith('m:')) sort = { key: 'net', dir: -1 };
     renderShell();
     update();
   } catch (err) {
@@ -114,21 +151,22 @@ async function load() {
 
 function renderShell() {
   const n = flows.months.length;
-  periodEl.textContent = `Net purchases of foreign long-term bonds by Japanese investors · monthly, ¥bn · ${monthLabel(flows.months[0], true)} – ${monthLabel(flows.months[n - 1], true)}`;
+  const cfg = INVESTORS[investor];
+  periodEl.textContent = `Net purchases of foreign long-term bonds by ${cfg.investors} · monthly, ${cfg.currency}bn · ${monthLabel(flows.months[0], true)} – ${monthLabel(flows.months[n - 1], true)}`;
 
   resultEl.innerHTML = `
     <div class="kpis" id="kpis"></div>
     <div class="card">
       <div class="card-head">
         <h3>Net purchases by market</h3>
-        <span class="hint">¥bn · positive = Japan bought more than it sold</span>
+        <span class="hint">${cfg.currency}bn · positive = ${esc(cfg.investors)} bought more than they sold</span>
         <div class="tools">
           <input id="filter" type="search" placeholder="Filter…" autocomplete="off" spellcheck="false" aria-label="Filter markets" />
           <div class="segmented" id="view" role="group" aria-label="Rows">
             ${VIEWS.map((v) => `<button type="button" data-kind="${v.kind}" aria-pressed="${v.kind === view}">${v.label}</button>`).join('')}
           </div>
           <div class="segmented" id="range" role="group" aria-label="Time range">
-            ${RANGES.map((r) => `<button type="button" data-months="${r.months}" aria-pressed="${r.months === range}">${r.label}</button>`).join('')}
+            ${RANGES.map((r) => `<button type="button" data-months="${r.months}" aria-pressed="${r.months === range}"${rangeAvailable(r.months) ? '' : ` disabled title="Only ${n} months of data"`}>${r.label}</button>`).join('')}
           </div>
         </div>
       </div>
@@ -148,8 +186,7 @@ function renderShell() {
       </div>
     </div>
     <p class="source">
-      Source: Bank of Japan / Ministry of Finance balance of payments (BPM6), portfolio investment assets, long-term debt securities, net, by country of issuer.
-      Euro area (12) is the sum of the twelve euro-area members BOJ reports separately. Blank months (·) are not published by BOJ.
+      Source: ${esc(cfg.source)}
       Fetched ${new Date(flows.fetchedAt * 1000).toLocaleString()}.
     </p>`;
 
@@ -290,4 +327,15 @@ function update() {
   document.getElementById('empty').classList.toggle('hidden', rows.length > 0);
 }
 
+investorEl.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.investor === investor) return;
+  investor = b.dataset.investor;
+  query = '';
+  showSmall = false;
+  savePrefs();
+  load();
+});
+
+loadPrefs();
 load();

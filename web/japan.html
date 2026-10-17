@@ -72,6 +72,7 @@
   .title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-4); }
   .title-row h2 { margin: 0; font-size: 22px; }
   .title-row .period { color: var(--muted); font-size: 13px; }
+  .title-row #investor { margin-left: auto; align-self: center; }
 
   .kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-3); }
   .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3) var(--space-4); }
@@ -112,6 +113,8 @@
   }
   .segmented button:hover { color: var(--text); }
   .segmented button[aria-pressed="true"] { background: var(--supply); color: #fff; font-weight: 600; }
+  .segmented button:disabled { opacity: 0.35; cursor: default; }
+  .segmented button:disabled:hover { color: var(--muted); }
   #filter {
     background: var(--panel-2);
     border: 1px solid var(--border);
@@ -195,18 +198,22 @@
       <a class="nav-link" href="list.html">List view</a>
       <a class="nav-link" href="chart.html">Chart view</a>
       <a class="nav-link" href="insider.html">Insider trades</a>
-      <a class="nav-link" aria-current="page">Japan flows</a>
+      <a class="nav-link" aria-current="page">Bond flows</a>
     </nav>
   </header>
 
   <main>
     <div class="title-row">
-      <h2>Where is Japanese money going?</h2>
+      <h2 id="title">Where is the money going?</h2>
       <span class="period" id="period"></span>
+      <div class="segmented" id="investor" role="group" aria-label="Investor">
+        <button type="button" data-investor="jp" aria-pressed="true">Japan</button>
+        <button type="button" data-investor="us" aria-pressed="false">United States</button>
+      </div>
     </div>
 
     <div id="result">
-      <div class="note"><span class="spin"></span>Downloading Bank of Japan balance of payments data…</div>
+      <div class="note"><span class="spin"></span>Loading…</div>
     </div>
   </main>
 
