@@ -437,6 +437,15 @@ searchEl.addEventListener('input', () => {
   render();
 });
 
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (!noteModalEl.classList.contains('hidden')) return;
+    searchEl.focus();
+    searchEl.select();
+  }
+});
+
 function carrySymbol() {
   const symbol = new URLSearchParams(window.location.search).get('symbol');
   if (!symbol) return;
