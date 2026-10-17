@@ -19,53 +19,62 @@ const (
 	userAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	cacheTTL    = 6 * time.Hour
 	attempts    = 3
-	window      = 12
 	seriesCode  = "BPPI6D3N9"
+	totalCode   = "BPPI6D3N5A"
+	firstData   = 4
 )
 
-type Country struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
-}
+const (
+	KindTotal   = "total"
+	KindRegion  = "region"
+	KindGroup   = "group"
+	KindCountry = "country"
+)
 
 var (
-	Featured = []Country{
-		{"DE", "Germany"},
-		{"FR", "France"},
-		{"NL", "Netherlands"},
-		{"IT", "Italy"},
-		{"ES", "Spain"},
+	regions = map[string]string{
+		"AS": "Asia",
+		"NA": "North America",
+		"CS": "Central and South America",
+		"OC": "Oceania",
+		"EP": "Europe",
+		"ME": "Middle East",
+		"AF": "Africa",
+		"OT": "Rest of the World",
+		"II": "International Organization",
+		"RW": "Unallocated",
 	}
-	OtherEuroArea = []Country{
-		{"BE", "Belgium"},
-		{"LX", "Luxembourg"},
-		{"IE", "Ireland"},
-		{"AT", "Austria"},
-		{"FI", "Finland"},
-		{"PT", "Portugal"},
-		{"GR", "Greece"},
+	groups = map[string]string{
+		"OE": "OECD countries",
+		"AA": "ASEAN",
+		"EU": "EU",
+		"EE": "Eastern Europe, Russia, etc.",
 	}
-	US = Country{"US", "United States"}
+	renames = map[string]string{
+		"US": "United States",
+		"GB": "United Kingdom",
+		"KR": "South Korea",
+		"CN": "China",
+		"ZA": "South Africa",
+		"AE": "UAE",
+	}
+	EuroArea = []string{"DE", "FR", "NL", "IT", "ES", "BE", "LX", "IE", "AT", "FI", "PT", "GR"}
 )
 
-type Series struct {
-	Key    string     `json:"key"`
+type Row struct {
+	Code   string     `json:"code"`
 	Name   string     `json:"name"`
+	Kind   string     `json:"kind"`
+	Region string     `json:"region,omitempty"`
 	Values []*float64 `json:"values"`
 }
 
 type Flows struct {
-	Months     []string `json:"months"`
-	EuroArea   []Series `json:"euroArea"`
-	TotalEA    Series   `json:"totalEA"`
-	US         Series   `json:"us"`
-	OtherEA    []Series `json:"otherEA"`
-	Cumulative []Series `json:"cumulative"`
-	Start      string   `json:"start"`
-	Unit       string   `json:"unit"`
-	Window     int      `json:"window"`
-	FetchedAt  int64    `json:"fetchedAt"`
-	Source     string   `json:"source"`
+	Months    []string `json:"months"`
+	Rows      []Row    `json:"rows"`
+	Unit      string   `json:"unit"`
+	FetchedAt int64    `json:"fetchedAt"`
+	Source    string   `json:"source"`
 }
 
 var (
@@ -94,100 +103,143 @@ func JapaneseDebtFlows() (*Flows, error) {
 		return nil, fmt.Errorf("fetching BOJ balance of payments: %w", err)
 	}
 
-	months, monthly, err := parseFlatFile(body)
+	flows, err := parseFlatFile(body)
 	if err != nil {
 		return nil, err
 	}
-	flows := Build(months, monthly)
 	flows.FetchedAt = time.Now().Unix()
 	cached, cachedAt = flows, time.Now()
 	return flows, nil
 }
 
-func Build(months []string, monthly map[string][]*float64) *Flows {
-	sums := map[string][]*float64{}
-	for code, values := range monthly {
-		sums[code] = rollingSum(values, window)
+func parseFlatFile(zipped []byte) (*Flows, error) {
+	zr, err := zip.NewReader(bytes.NewReader(zipped), int64(len(zipped)))
+	if err != nil {
+		return nil, fmt.Errorf("opening BOJ zip: %w", err)
 	}
-
-	start := window - 1
-	if start > len(months) {
-		start = len(months)
-	}
-	out := &Flows{
-		Months: formatMonths(months[start:]),
-		Unit:   "100bn yen",
-		Window: window,
-		Source: "Bank of Japan / Ministry of Finance, Balance of Payments (BPM6), portfolio investment assets, long-term debt securities, net",
-	}
-	trim := func(v []*float64) []*float64 {
-		if v == nil {
-			return make([]*float64, len(out.Months))
+	for _, f := range zr.File {
+		if !strings.HasSuffix(strings.ToLower(f.Name), ".csv") {
+			continue
 		}
-		return v[start:]
+		rc, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		return ParseCSV(rc)
 	}
-
-	var parts [][]*float64
-	for _, c := range Featured {
-		v := trim(sums[c.Code])
-		parts = append(parts, v)
-		out.EuroArea = append(out.EuroArea, Series{Key: c.Code, Name: c.Name, Values: v})
-	}
-	var others [][]*float64
-	for _, c := range OtherEuroArea {
-		v := trim(sums[c.Code])
-		others = append(others, v)
-		out.OtherEA = append(out.OtherEA, Series{Key: c.Code, Name: c.Name, Values: v})
-	}
-	other := add(others)
-	parts = append(parts, other)
-	out.EuroArea = append(out.EuroArea, Series{Key: "OTHER", Name: "Other EA", Values: other})
-	out.TotalEA = Series{Key: "EA", Name: "Total EA", Values: add(parts)}
-	out.US = Series{Key: US.Code, Name: US.Name, Values: trim(sums[US.Code])}
-	for _, c := range append(append([]Country{US}, Featured...), OtherEuroArea...) {
-		out.Cumulative = append(out.Cumulative, Series{Key: c.Code, Name: c.Name, Values: trim(runningSum(monthly[c.Code]))})
-	}
-	if len(months) > 0 {
-		out.Start = formatMonths(months[:1])[0]
-	}
-	return out
+	return nil, fmt.Errorf("no CSV in BOJ zip")
 }
 
-func runningSum(values []*float64) []*float64 {
-	if values == nil {
-		return nil
+type rawRow struct {
+	Row
+	cells []string
+}
+
+func ParseCSV(r io.Reader) (*Flows, error) {
+	cr := csv.NewReader(r)
+	cr.FieldsPerRecord = -1
+	cr.LazyQuotes = true
+	header, err := cr.Read()
+	if err != nil {
+		return nil, fmt.Errorf("reading BOJ header: %w", err)
 	}
-	out := make([]*float64, len(values))
-	var sum float64
-	for i, v := range values {
-		if v == nil {
+	if len(header) <= firstData {
+		return nil, fmt.Errorf("unexpected BOJ header with %d columns", len(header))
+	}
+
+	var raws []rawRow
+	region := ""
+	for {
+		rec, err := cr.Read()
+		if err == io.EOF {
 			break
 		}
-		sum += *v
-		s := round(sum / 1000)
-		out[i] = &s
+		if err != nil {
+			return nil, fmt.Errorf("reading BOJ CSV: %w", err)
+		}
+		if len(rec) <= firstData {
+			continue
+		}
+		if rec[0] == totalCode {
+			raws = append(raws, rawRow{Row: Row{Code: "ALL", Name: "All countries", Kind: KindTotal}, cells: rec[firstData:]})
+			continue
+		}
+		code, ok := strings.CutPrefix(rec[0], seriesCode)
+		if !ok || code == "" {
+			continue
+		}
+		row := Row{Code: code, Name: seriesName(rec[2], code)}
+		switch {
+		case regions[code] != "":
+			row.Kind, row.Name = KindRegion, regions[code]
+			region = row.Name
+		case groups[code] != "":
+			row.Kind, row.Name = KindGroup, groups[code]
+			region = ""
+		default:
+			row.Kind, row.Region = KindCountry, region
+		}
+		raws = append(raws, rawRow{Row: row, cells: rec[firstData:]})
 	}
-	return out
-}
 
-func rollingSum(values []*float64, n int) []*float64 {
-	out := make([]*float64, len(values))
-	for i := n - 1; i < len(values); i++ {
-		var sum float64
-		complete := true
-		for _, v := range values[i-n+1 : i+1] {
-			if v == nil {
-				complete = false
+	months := header[firstData:]
+	first, last := -1, -1
+	for i := range months {
+		for _, raw := range raws {
+			if raw.Kind == KindCountry && i < len(raw.cells) && strings.TrimSpace(raw.cells[i]) != "" {
+				if first < 0 {
+					first = i
+				}
+				last = i
 				break
 			}
-			sum += *v
-		}
-		if complete {
-			s := round(sum / 1000)
-			out[i] = &s
 		}
 	}
-	return out
+	if first < 0 {
+		return nil, fmt.Errorf("BOJ CSV has no long-term debt securities data by country")
+	}
+
+	out := &Flows{
+		Months: formatMonths(months[first : last+1]),
+		Unit:   "bn yen",
+		Source: "Bank of Japan / Ministry of Finance, Balance of Payments (BPM6), portfolio investment assets, long-term debt securities, net, by country of issuer",
+	}
+	byCode := map[string][]*float64{}
+	for _, raw := range raws {
+		values := make([]*float64, last-first+1)
+		for i := first; i <= last && i < len(raw.cells); i++ {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(raw.cells[i]), 64); err == nil {
+				bn := round(v / 10)
+				values[i-first] = &bn
+			}
+		}
+		raw.Values = values
+		byCode[raw.Code] = values
+		out.Rows = append(out.Rows, raw.Row)
+	}
+
+	var members [][]*float64
+	for _, code := range EuroArea {
+		if v, ok := byCode[code]; ok {
+			members = append(members, v)
+		}
+	}
+	if len(members) == len(EuroArea) {
+		out.Rows = append(out.Rows, Row{Code: "EA", Name: "Euro area (12)", Kind: KindGroup, Values: add(members)})
+	}
+	return out, nil
+}
+
+func seriesName(label, code string) string {
+	if name := renames[code]; name != "" {
+		return name
+	}
+	parts := strings.Split(label, "/")
+	if len(parts) >= 2 {
+		return strings.TrimSpace(parts[len(parts)-2])
+	}
+	return code
 }
 
 func add(series [][]*float64) []*float64 {
@@ -199,7 +251,7 @@ func add(series [][]*float64) []*float64 {
 		var sum float64
 		complete := true
 		for _, s := range series {
-			if s[i] == nil {
+			if i >= len(s) || s[i] == nil {
 				complete = false
 				break
 			}
@@ -214,7 +266,7 @@ func add(series [][]*float64) []*float64 {
 }
 
 func round(v float64) float64 {
-	return math.Round(v*100) / 100
+	return math.Round(v*10) / 10
 }
 
 func formatMonths(months []string) []string {
@@ -227,90 +279,6 @@ func formatMonths(months []string) []string {
 		}
 	}
 	return out
-}
-
-func parseFlatFile(zipped []byte) ([]string, map[string][]*float64, error) {
-	zr, err := zip.NewReader(bytes.NewReader(zipped), int64(len(zipped)))
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening BOJ zip: %w", err)
-	}
-	for _, f := range zr.File {
-		if !strings.HasSuffix(strings.ToLower(f.Name), ".csv") {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return nil, nil, err
-		}
-		defer rc.Close()
-		return ParseCSV(rc)
-	}
-	return nil, nil, fmt.Errorf("no CSV in BOJ zip")
-}
-
-func ParseCSV(r io.Reader) ([]string, map[string][]*float64, error) {
-	wanted := map[string]bool{}
-	for _, c := range append(append([]Country{US}, Featured...), OtherEuroArea...) {
-		wanted[seriesCode+c.Code] = true
-	}
-
-	cr := csv.NewReader(r)
-	cr.FieldsPerRecord = -1
-	cr.LazyQuotes = true
-	header, err := cr.Read()
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading BOJ header: %w", err)
-	}
-	const firstData = 4
-	if len(header) <= firstData {
-		return nil, nil, fmt.Errorf("unexpected BOJ header with %d columns", len(header))
-	}
-
-	raw := map[string][]string{}
-	for {
-		rec, err := cr.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("reading BOJ CSV: %w", err)
-		}
-		if len(rec) > firstData && wanted[rec[0]] {
-			raw[strings.TrimPrefix(rec[0], seriesCode)] = rec[firstData:]
-		}
-	}
-	if len(raw) != len(wanted) {
-		return nil, nil, fmt.Errorf("BOJ CSV has %d of %d expected series", len(raw), len(wanted))
-	}
-
-	months := header[firstData:]
-	first, last := -1, -1
-	for i := range months {
-		for _, rec := range raw {
-			if i < len(rec) && strings.TrimSpace(rec[i]) != "" {
-				if first < 0 {
-					first = i
-				}
-				last = i
-				break
-			}
-		}
-	}
-	if first < 0 {
-		return nil, nil, fmt.Errorf("BOJ CSV has no data for the expected series")
-	}
-
-	out := map[string][]*float64{}
-	for code, rec := range raw {
-		values := make([]*float64, last-first+1)
-		for i := first; i <= last && i < len(rec); i++ {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(rec[i]), 64); err == nil {
-				values[i-first] = &v
-			}
-		}
-		out[code] = values
-	}
-	return months[first : last+1], out, nil
 }
 
 func get(url string) ([]byte, error) {
