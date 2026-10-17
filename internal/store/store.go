@@ -103,6 +103,12 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
+	if _, err := db.Exec(`ALTER TABLE symbols ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("adding favorite column to symbols table: %w", err)
+		}
+	}
+
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS insider_trades (
 			symbol     TEXT PRIMARY KEY,
@@ -521,13 +527,14 @@ func (s *Store) ListSymbols() ([]string, error) {
 }
 
 type SymbolInfo struct {
-	Symbol string
-	Name   string
-	Note   string
+	Symbol   string
+	Name     string
+	Note     string
+	Favorite bool
 }
 
 func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
-	rows, err := s.db.Query(`SELECT symbol, name, note FROM symbols ORDER BY symbol`)
+	rows, err := s.db.Query(`SELECT symbol, name, note, favorite FROM symbols ORDER BY symbol`)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +543,7 @@ func (s *Store) ListSymbolInfo() ([]SymbolInfo, error) {
 	var infos []SymbolInfo
 	for rows.Next() {
 		var info SymbolInfo
-		if err := rows.Scan(&info.Symbol, &info.Name, &info.Note); err != nil {
+		if err := rows.Scan(&info.Symbol, &info.Name, &info.Note, &info.Favorite); err != nil {
 			return nil, err
 		}
 		infos = append(infos, info)
@@ -551,6 +558,15 @@ func (s *Store) SetSymbolName(symbol, name string) error {
 
 func (s *Store) SetSymbolNote(symbol, note string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE symbols SET note = ? WHERE symbol = ?`, note, symbol)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (s *Store) SetSymbolFavorite(symbol string, favorite bool) (bool, error) {
+	res, err := s.db.Exec(`UPDATE symbols SET favorite = ? WHERE symbol = ?`, favorite, symbol)
 	if err != nil {
 		return false, err
 	}

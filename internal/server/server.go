@@ -103,6 +103,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/insider", s.handleInsider)
 	mux.HandleFunc("/api/insider/recent", s.handleInsiderRecent)
 	mux.HandleFunc("/api/note", s.handleNote)
+	mux.HandleFunc("/api/favorite", s.handleFavorite)
 	mux.HandleFunc("/api/bonds", s.handleBonds)
 	mux.HandleFunc("/api/bonds/history", s.handleBondHistory)
 	mux.HandleFunc("/api/japan-flows", s.handleJapanFlows)
@@ -112,6 +113,7 @@ func (s *Server) Routes() http.Handler {
 			http.Redirect(w, r, "/list.html", http.StatusFound)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		files.ServeHTTP(w, r)
 	})
 	return mux
@@ -367,6 +369,7 @@ type screenerRowDTO struct {
 	BondYieldChange    *float64 `json:"bondYieldChange"`
 	BondLabel          string   `json:"bondLabel"`
 	Note               string   `json:"note"`
+	Favorite           bool     `json:"favorite"`
 	Sector             string   `json:"sector"`
 	Industry           string   `json:"industry"`
 	AITheme            string   `json:"aiTheme"`
@@ -560,6 +563,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			BondYieldChange: bondYieldChange,
 			BondLabel:       bondLabel,
 			Note:            info.Note,
+			Favorite:        info.Favorite,
 			AITheme:         category.Theme(info.Symbol),
 		}
 		if ok {
@@ -596,6 +600,35 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 
 	symbol := strings.ToUpper(strings.TrimSpace(body.Symbol))
 	found, err := s.store.SetSymbolNote(symbol, strings.TrimSpace(body.Note))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, fmt.Sprintf("unknown symbol %q", symbol), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleFavorite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Symbol   string `json:"symbol"`
+		Favorite bool   `json:"favorite"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		http.Error(w, fmt.Sprintf("invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	symbol := strings.ToUpper(strings.TrimSpace(body.Symbol))
+	found, err := s.store.SetSymbolFavorite(symbol, body.Favorite)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

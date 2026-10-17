@@ -6,7 +6,8 @@ const searchEl = document.getElementById('search');
 const themeFilterEl = document.getElementById('theme-filter');
 const sectorFilterEl = document.getElementById('sector-filter');
 const industryFilterEl = document.getElementById('industry-filter');
-const countEl =document.getElementById('count');
+const countEl = document.getElementById('count');
+const favFilterEl = document.getElementById('fav-filter');
 const noteModalEl = document.getElementById('note-modal');
 const noteTitleEl = document.getElementById('note-title');
 const noteTextEl = document.getElementById('note-text');
@@ -19,6 +20,7 @@ let themeFilter = 'all';
 let sectorFilter = 'all';
 let industryFilter = 'all';
 let query = '';
+let favoritesOnly = loadFavoritesOnly();
 let sortKey = 'symbol';
 let sortDir = 1;
 let noteSymbol = null;
@@ -80,6 +82,72 @@ function noteCell(row) {
   return `<button class="note-btn" type="button" title="${escapeHtml(note)}">${escapeHtml(note.split('\n')[0])}</button>`;
 }
 
+function favButton(row) {
+  const label = `${row.favorite ? 'Remove' : 'Add'} ${row.symbol} ${row.favorite ? 'from' : 'to'} favorites`;
+  return `<button class="fav-btn" type="button" aria-pressed="${row.favorite ? 'true' : 'false'}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${row.favorite ? '★' : '☆'}</button>`;
+}
+
+function filterButton(kind, value, active) {
+  if (!value) return '–';
+  const on = active === value;
+  return `<button class="filter-link" type="button" data-filter="${kind}" data-value="${escapeHtml(value)}" aria-pressed="${on}" title="${on ? 'Clear' : 'Filter by'} ${kind}">${escapeHtml(value)}</button>`;
+}
+
+const FAV_ONLY_KEY = 'list.favoritesOnly';
+
+function loadFavoritesOnly() {
+  try {
+    return localStorage.getItem(FAV_ONLY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setFavoritesOnly(on) {
+  favoritesOnly = on;
+  try {
+    localStorage.setItem(FAV_ONLY_KEY, on ? '1' : '0');
+  } catch {}
+  render();
+}
+
+async function toggleFavorite(symbol) {
+  const row = rows.find(r => r.symbol === symbol);
+  if (!row) return;
+  const favorite = !row.favorite;
+  row.favorite = favorite;
+  render();
+  try {
+    const resp = await fetch('/api/favorite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, favorite }),
+    });
+    if (!resp.ok) throw new Error((await resp.text()).trim());
+  } catch (err) {
+    row.favorite = !favorite;
+    render();
+    alert(`Could not update favorite for ${symbol}: ${err.message}`);
+  }
+}
+
+function applyCellFilter(kind, value) {
+  if (kind === 'sector') {
+    sectorFilter = sectorFilter === value ? 'all' : value;
+    sectorFilterEl.value = sectorFilter;
+    refreshIndustryOptions();
+  } else {
+    const row = rows.find(r => r.industry === value);
+    if (industryFilter !== value && row && sectorFilter !== 'all' && sectorFilter !== row.sector) {
+      sectorFilter = 'all';
+      sectorFilterEl.value = sectorFilter;
+    }
+    industryFilter = industryFilter === value ? 'all' : value;
+    refreshIndustryOptions();
+  }
+  render();
+}
+
 function showNoteError(msg) {
   noteErrorEl.textContent = msg;
   noteErrorEl.classList.toggle('hidden', !msg);
@@ -127,6 +195,7 @@ async function saveNote() {
 }
 
 function matchesFilter(row) {
+  if (favoritesOnly && !row.favorite) return false;
   if (themeFilter === 'ai') {
     if (!row.aiTheme) return false;
   } else if (themeFilter === 'non-ai') {
@@ -139,6 +208,17 @@ function matchesFilter(row) {
   return [row.symbol, row.name, row.note, row.aiTheme, row.sector, row.industry].some(v => (v || '').toLowerCase().includes(q));
 }
 
+function matchRank(row) {
+  const q = query.toLowerCase();
+  const symbol = row.symbol.toLowerCase();
+  const name = (row.name || '').toLowerCase();
+  if (symbol === q) return 0;
+  if (symbol.startsWith(q)) return 1;
+  if (name.startsWith(q)) return 2;
+  if (name.split(/[\s.,()-]+/).some(w => w.startsWith(q))) return 3;
+  return 4;
+}
+
 function sortRows(list) {
   const sorted = [...list];
   sorted.sort((a, b) => {
@@ -147,17 +227,18 @@ function sortRows(list) {
     if (typeof av === 'string') return av.localeCompare(bv) * sortDir;
     return ((av ?? -Infinity) - (bv ?? -Infinity)) * sortDir;
   });
+  if (query) sorted.sort((a, b) => matchRank(a) - matchRank(b));
   return sorted;
 }
 
 const ORDER_KEY = 'list.columnOrder';
 
 const COLUMNS = [
-  { id: 'symbol', label: 'Symbol', left: true, tdClass: () => 'symbol', cell: r => `<a class="cell-link" href="chart.html?symbol=${encodeURIComponent(r.symbol)}">${r.symbol}</a>` },
+  { id: 'symbol', label: 'Symbol', left: true, tdClass: () => 'symbol', cell: r => `${favButton(r)}<a class="cell-link" href="chart.html?symbol=${encodeURIComponent(r.symbol)}">${r.symbol}</a>` },
   { id: 'name', label: 'Name', left: true, tdClass: () => 'name', cell: r => r.name || '' },
   { id: 'aiTheme', label: 'AI Theme', left: true, cell: r => r.aiTheme ? `<span class="theme-pill">${escapeHtml(r.aiTheme)}</span>` : '–' },
-  { id: 'sector', label: 'Sector', left: true, tdClass: () => 'sector', cell: r => escapeHtml(r.sector) || '–' },
-  { id: 'industry', label: 'Industry', left: true, tdClass: () => 'industry', cell: r => escapeHtml(r.industry) || '–' },
+  { id: 'sector', label: 'Sector', left: true, tdClass: () => 'sector', cell: r => filterButton('sector', r.sector, sectorFilter) },
+  { id: 'industry', label: 'Industry', left: true, tdClass: () => 'industry', cell: r => filterButton('industry', r.industry, industryFilter) },
   { id: 'price', label: 'Price', cell: r => fmt(r.price) },
   { id: 'dailyChangePct', label: 'Daily Change', tdClass: r => pctClass(r.dailyChangePct), cell: r => r.dailyChangePct === undefined || r.dailyChangePct === null ? '–' : `${r.dailyChangePct >= 0 ? '+' : ''}${fmt(r.dailyChangePct)}%` },
   { id: 'zonePct', label: 'Zone', cell: r => zonePill(r) },
@@ -277,7 +358,11 @@ headRowEl.addEventListener('click', e => {
 function render() {
   const filtered = sortRows(rows.filter(matchesFilter));
 
+  const favCount = rows.filter(r => r.favorite).length;
   countEl.textContent = `${filtered.length} of ${rows.length} tickers`;
+  favFilterEl.setAttribute('aria-pressed', favoritesOnly ? 'true' : 'false');
+  favFilterEl.textContent = `★ Favorites (${favCount})`;
+  emptyNoteEl.textContent = favoritesOnly && favCount === 0 ? 'No favorites yet. Click ☆ next to a ticker to add it.' : 'No tickers match.';
   emptyNoteEl.classList.toggle('hidden', filtered.length > 0);
 
   const cols = orderedColumns();
@@ -291,8 +376,14 @@ function render() {
 }
 
 tableBodyEl.addEventListener('click', e => {
-  if (e.target.closest('.note-btn')) openNote(e.target.closest('tr').dataset.symbol);
+  const symbol = e.target.closest('tr')?.dataset.symbol;
+  if (e.target.closest('.note-btn')) return openNote(symbol);
+  if (e.target.closest('.fav-btn')) return toggleFavorite(symbol);
+  const filterBtn = e.target.closest('.filter-link');
+  if (filterBtn) applyCellFilter(filterBtn.dataset.filter, filterBtn.dataset.value);
 });
+
+favFilterEl.addEventListener('click', () => setFavoritesOnly(!favoritesOnly));
 
 tableWrapEl.addEventListener('scroll', () => {
   tableWrapEl.classList.toggle('scrolled', tableWrapEl.scrollLeft > 4);
