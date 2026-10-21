@@ -5,6 +5,7 @@ const recentEl = document.getElementById('recent');
 const resultEl = document.getElementById('result');
 const chartLinkEl = document.getElementById('chart-link');
 const listLinkEl = document.getElementById('list-link');
+const suggestEl = document.getElementById('suggest');
 
 const TYPES = {
   P: { label: 'Purchase', kind: 'buy', color: '#26a69a' },
@@ -140,14 +141,152 @@ async function loadTracked() {
     if (!resp.ok) return;
     const json = await resp.json();
     trackedNames = new Map(json.symbols.map(s => [s.symbol, s.name || '']));
-    document.getElementById('tracked').innerHTML = json.symbols
-      .map(s => `<option value="${esc(s.symbol)}">${esc(s.name || '')}</option>`)
-      .join('');
     updateChartLink();
+    if (!suggestEl.classList.contains('hidden')) openSuggest();
   } catch (e) {
     console.error('loading tracked symbols failed', e);
   }
 }
+
+let options = [];
+let active = -1;
+let interacted = false;
+
+function highlight(text, q) {
+  const i = q ? text.toUpperCase().indexOf(q) : -1;
+  if (i < 0) return esc(text);
+  return `${esc(text.slice(0, i))}<mark>${esc(text.slice(i, i + q.length))}</mark>${esc(text.slice(i + q.length))}`;
+}
+
+function rank(sym, name, q) {
+  const n = name.toUpperCase();
+  if (sym === q) return 0;
+  if (sym.startsWith(q)) return 1;
+  if (n.startsWith(q)) return 2;
+  if (n.split(/[\s.,&'-]+/).some(w => w.startsWith(q))) return 3;
+  if (sym.includes(q)) return 4;
+  if (q.length >= 3 && n.includes(q)) return 5;
+  return -1;
+}
+
+function buildOptions(q) {
+  const recent = recentTickers();
+  const nameOf = s => trackedNames.get(s) || '';
+  if (!q) {
+    const rest = [...trackedNames.keys()].filter(s => !recent.includes(s)).sort();
+    return [
+      ...recent.slice(0, 5).map(s => ({ symbol: s, name: nameOf(s), group: 'Recent' })),
+      ...rest.map(s => ({ symbol: s, name: nameOf(s), group: 'Your tickers' })),
+    ];
+  }
+  const pool = [...new Set([...recent, ...trackedNames.keys()])];
+  const hits = pool
+    .map(s => ({ symbol: s, name: nameOf(s), score: rank(s, nameOf(s), q), recent: recent.includes(s) }))
+    .filter(o => o.score >= 0)
+    .sort((a, b) => a.score - b.score || b.recent - a.recent || a.symbol.length - b.symbol.length || a.symbol.localeCompare(b.symbol))
+    .slice(0, 10)
+    .map(o => ({ ...o, group: 'Matches' }));
+  const typed = q.replace(/[^A-Z0-9.\-]/g, '');
+  if (typed && typed === q && !hits.some(o => o.symbol === typed)) {
+    const lookupOpt = { symbol: typed, name: 'Look up any ticker on OpenInsider', group: hits.length ? 'Other' : 'Look up', lookup: true };
+    return [...hits, lookupOpt];
+  }
+  return hits;
+}
+
+function renderSuggest() {
+  const q = tickerEl.value.trim().toUpperCase();
+  let group = '';
+  suggestEl.innerHTML = options.length ? options.map((o, i) => {
+    const head = o.group !== group ? `<li class="group" role="presentation">${esc(o.group)}</li>` : '';
+    group = o.group;
+    const hint = o.lookup ? '↵ fetch' : o.symbol === symbol ? 'showing' : trackedNames.has(o.symbol) ? '' : 'recent';
+    return `${head}<li role="option" id="opt-${i}" data-i="${i}" aria-selected="${i === active}">
+      <span class="sym">${o.lookup ? esc(o.symbol) : highlight(o.symbol, q)}</span>
+      <span class="name">${o.lookup ? esc(o.name) : highlight(o.name || '—', q)}</span>
+      <span class="hint">${hint}</span>
+    </li>`;
+  }).join('') : `<li class="none">No tickers match “${esc(q)}”.</li>`;
+  tickerEl.setAttribute('aria-activedescendant', active >= 0 ? `opt-${active}` : '');
+  suggestEl.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+}
+
+function openSuggest() {
+  const q = tickerEl.value.trim().toUpperCase();
+  options = buildOptions(tickerEl.selectionStart === 0 && tickerEl.selectionEnd === tickerEl.value.length ? '' : q);
+  active = q && options.length && !options[0].lookup ? 0 : -1;
+  if (!options.length && !q) return closeSuggest();
+  suggestEl.classList.remove('hidden');
+  tickerEl.setAttribute('aria-expanded', 'true');
+  renderSuggest();
+}
+
+function closeSuggest() {
+  suggestEl.classList.add('hidden');
+  tickerEl.setAttribute('aria-expanded', 'false');
+  tickerEl.removeAttribute('aria-activedescendant');
+  active = -1;
+}
+
+function pick(i) {
+  const o = options[i];
+  if (!o) return;
+  closeSuggest();
+  lookup(o.symbol);
+}
+
+['pointerdown', 'keydown'].forEach(type => document.addEventListener(type, () => { interacted = true; }, { capture: true }));
+tickerEl.addEventListener('focus', () => {
+  if (!interacted) return;
+  tickerEl.select();
+  openSuggest();
+});
+tickerEl.addEventListener('click', () => {
+  if (!suggestEl.classList.contains('hidden')) return;
+  tickerEl.select();
+  openSuggest();
+});
+tickerEl.addEventListener('input', () => {
+  const q = tickerEl.value.trim().toUpperCase();
+  options = buildOptions(q);
+  active = q && options.length ? 0 : -1;
+  suggestEl.classList.remove('hidden');
+  tickerEl.setAttribute('aria-expanded', 'true');
+  renderSuggest();
+});
+tickerEl.addEventListener('blur', closeSuggest);
+tickerEl.addEventListener('keydown', e => {
+  const open = !suggestEl.classList.contains('hidden');
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!open) return openSuggest();
+    if (!options.length) return;
+    const step = e.key === 'ArrowDown' ? 1 : -1;
+    active = active < 0 ? (step > 0 ? 0 : options.length - 1) : (active + step + options.length) % options.length;
+    renderSuggest();
+  } else if (e.key === 'Enter' && open && active >= 0) {
+    e.preventDefault();
+    pick(active);
+  } else if (e.key === 'Escape') {
+    if (open) {
+      e.preventDefault();
+      closeSuggest();
+    } else {
+      tickerEl.blur();
+    }
+  }
+});
+suggestEl.addEventListener('mousedown', e => e.preventDefault());
+suggestEl.addEventListener('click', e => {
+  const li = e.target.closest('[role="option"]');
+  if (li) pick(Number(li.dataset.i));
+});
+suggestEl.addEventListener('mousemove', e => {
+  const li = e.target.closest('[role="option"]');
+  if (!li || Number(li.dataset.i) === active) return;
+  active = Number(li.dataset.i);
+  suggestEl.querySelectorAll('[role="option"]').forEach(el => el.setAttribute('aria-selected', String(Number(el.dataset.i) === active)));
+});
 
 function updateChartLink() {
   chartLinkEl.href = trackedNames.has(symbol) ? `chart.html?symbol=${encodeURIComponent(symbol)}` : 'chart.html';
@@ -260,6 +399,7 @@ async function load() {
   }
   symbol = sym;
   tickerEl.value = sym;
+  closeSuggest();
   const id = ++requestId;
 
   document.title = `${sym} Insider Trades — Supply & Demand Dashboard`;

@@ -21,7 +21,10 @@ const (
 )
 
 type Trade struct {
+	Ticker     string   `json:"ticker,omitempty"`
+	Company    string   `json:"company,omitempty"`
 	Flags      string   `json:"flags"`
+	Filed      string   `json:"filed,omitempty"`
 	TradeDate  string   `json:"tradeDate"`
 	FilingDate string   `json:"filingDate"`
 	Insider    string   `json:"insider"`
@@ -38,18 +41,23 @@ type Trade struct {
 }
 
 var (
-	tableRe  = regexp.MustCompile(`(?s)class="tinytable">.*?<tbody>(.*?)</tbody>`)
+	tableRe  = regexp.MustCompile(`(?s)class="tinytable">(.*?)<tbody>(.*?)</tbody>`)
+	headRe   = regexp.MustCompile(`(?s)<th[^>]*>(.*?)</th>`)
 	rowRe    = regexp.MustCompile(`(?s)<tr[^>]*>(.*?)</tr>`)
 	cellRe   = regexp.MustCompile(`(?s)<td[^>]*>(.*?)</td>`)
 	tagRe    = regexp.MustCompile(`<[^>]+>`)
 	secRe    = regexp.MustCompile(`href="([^"]*sec\.gov[^"]*)"`)
 	personRe = regexp.MustCompile(`href="(/insider/[^"]*)"`)
+	tickerRe = regexp.MustCompile(`href="/([A-Za-z0-9.\-]+)"`)
 	numRe    = regexp.MustCompile(`[$,+%]`)
 
 	client = &http.Client{Timeout: 60 * time.Second}
 
 	mu    sync.Mutex
 	cache = map[string]cacheEntry{}
+
+	latestMu    sync.Mutex
+	latestCache = map[int]cacheEntry{}
 )
 
 type cacheEntry struct {
@@ -91,6 +99,30 @@ func Fetch(symbol string, days int) ([]Trade, error) {
 	}
 
 	return parse(string(body)), nil
+}
+
+func Latest(days int) ([]Trade, time.Time, error) {
+	latestMu.Lock()
+	defer latestMu.Unlock()
+	if e, ok := latestCache[days]; ok && time.Since(e.at) < cacheTTL {
+		return e.trades, e.at, nil
+	}
+
+	url := fmt.Sprintf("http://openinsider.com/screener?s=&fd=%d&td=0&cnt=5000&xp=1&xs=1", days)
+	var body []byte
+	var err error
+	for i := 0; i < attempts; i++ {
+		if body, err = get(url); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("fetching latest openinsider trades: %w", err)
+	}
+
+	e := cacheEntry{at: time.Now(), trades: parse(string(body))}
+	latestCache[days] = e
+	return e.trades, e.at, nil
 }
 
 func Within(trades []Trade, days int) []Trade {
@@ -140,34 +172,63 @@ func parse(page string) []Trade {
 	if table == nil {
 		return []Trade{}
 	}
+	col := map[string]int{}
+	for i, h := range headRe.FindAllStringSubmatch(table[1], -1) {
+		col[strings.Join(strings.Fields(html.UnescapeString(tagRe.ReplaceAllString(h[1], ""))), " ")] = i
+	}
+	insider, ok := col["Insider Name"]
+	if !ok {
+		insider = 4
+	}
+	at := func(cells []string, name string, fallback int) string {
+		i, ok := col[name]
+		if !ok {
+			i = fallback
+		}
+		if i < 0 || i >= len(cells) {
+			return ""
+		}
+		return cells[i]
+	}
+
 	trades := []Trade{}
-	for _, row := range rowRe.FindAllStringSubmatch(table[1], -1) {
+	for _, row := range rowRe.FindAllStringSubmatch(table[2], -1) {
 		raw := cellRe.FindAllStringSubmatch(row[1], -1)
-		if len(raw) < 12 {
+		if len(raw) < insider+8 {
 			continue
 		}
 		cells := make([]string, len(raw))
 		for i, c := range raw {
 			cells[i] = strings.TrimSpace(html.UnescapeString(tagRe.ReplaceAllString(c[1], "")))
 		}
+		filed := at(cells, "Filing Date", 1)
 		t := Trade{
-			Flags:      cells[0],
-			TradeDate:  cells[2],
-			FilingDate: prefix(cells[1], 10),
-			Insider:    cells[4],
-			Title:      cells[5],
-			Type:       cells[6],
-			Code:       prefix(cells[6], 1),
-			Price:      number(cells[7]),
-			Qty:        number(cells[8]),
-			Owned:      number(cells[9]),
-			OwnedChg:   cells[10],
-			Value:      number(cells[11]),
+			Company:    at(cells, "Company Name", -1),
+			Flags:      at(cells, "X", 0),
+			TradeDate:  at(cells, "Trade Date", 2),
+			FilingDate: prefix(filed, 10),
+			Insider:    cells[insider],
+			Title:      at(cells, "Title", insider+1),
+			Type:       at(cells, "Trade Type", insider+2),
+			Price:      number(at(cells, "Price", insider+3)),
+			Qty:        number(at(cells, "Qty", insider+4)),
+			Owned:      number(at(cells, "Owned", insider+5)),
+			OwnedChg:   at(cells, "ΔOwn", insider+6),
+			Value:      number(at(cells, "Value", insider+7)),
 		}
-		if m := secRe.FindStringSubmatch(raw[1][1]); m != nil {
+		t.Code = prefix(t.Type, 1)
+		if i, ok := col["Ticker"]; ok && i < len(raw) {
+			if m := tickerRe.FindStringSubmatch(raw[i][1]); m != nil {
+				t.Ticker = m[1]
+			}
+		}
+		if len(filed) > 10 {
+			t.Filed = filed
+		}
+		if m := secRe.FindStringSubmatch(raw[col["Filing Date"]][1]); m != nil {
 			t.FilingURL = m[1]
 		}
-		if m := personRe.FindStringSubmatch(raw[4][1]); m != nil {
+		if m := personRe.FindStringSubmatch(raw[insider][1]); m != nil {
 			t.InsiderURL = "http://openinsider.com" + m[1]
 		}
 		trades = append(trades, t)
