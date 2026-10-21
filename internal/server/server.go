@@ -103,6 +103,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/screener", s.handleScreener)
 	mux.HandleFunc("/api/insider", s.handleInsider)
 	mux.HandleFunc("/api/insider/recent", s.handleInsiderRecent)
+	mux.HandleFunc("/api/insider/latest", s.handleInsiderLatest)
 	mux.HandleFunc("/api/note", s.handleNote)
 	mux.HandleFunc("/api/favorite", s.handleFavorite)
 	mux.HandleFunc("/api/bonds", s.handleBonds)
@@ -853,6 +854,26 @@ func (s *Server) handleInsiderRecent(w http.ResponseWriter, r *http.Request) {
 		"fetchedAt": oldest.Unix(),
 	}); err != nil {
 		log.Printf("encoding /api/insider/recent response: %v", err)
+	}
+}
+
+func (s *Server) handleInsiderLatest(w http.ResponseWriter, r *http.Request) {
+	days := 3
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= 30 {
+		days = d
+	}
+	trades, fetchedAt, err := openinsider.Latest(days)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"days":      days,
+		"trades":    trades,
+		"fetchedAt": fetchedAt.Unix(),
+	}); err != nil {
+		log.Printf("encoding /api/insider/latest response: %v", err)
 	}
 }
 

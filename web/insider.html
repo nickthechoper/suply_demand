@@ -94,7 +94,7 @@
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    width: 220px;
+    width: 300px;
   }
   #ticker::placeholder { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); }
   #ticker:focus { outline: none; border-color: var(--supply); }
@@ -109,6 +109,45 @@
     pointer-events: none;
   }
   #ticker:focus + .kbd { display: none; }
+  .suggest {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    width: max(100%, 380px);
+    max-height: 380px;
+    overflow: auto;
+    margin: 0;
+    padding: var(--space-1) 0;
+    list-style: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+  .suggest .group {
+    padding: var(--space-2) var(--space-3) var(--space-1);
+    color: var(--faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .suggest [role="option"] {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 7px var(--space-3);
+    margin: 0 var(--space-1);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .suggest [role="option"][aria-selected="true"] { background: rgba(33, 87, 243, 0.22); }
+  .suggest .sym { font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .suggest .name { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .suggest .hint { color: var(--faint); font-size: 11px; white-space: nowrap; }
+  .suggest mark { background: none; color: var(--accent); }
+  .suggest .none { padding: var(--space-3); color: var(--muted); font-size: 13px; }
 
   .segmented {
     display: inline-flex;
@@ -419,6 +458,7 @@
     .title-row .links { margin-left: 0; width: 100%; }
     #ticker { width: 100%; }
     .ticker-field { flex: 1 1 100%; }
+    .suggest { width: 100%; }
     #search { width: 100%; }
     .chart-body { min-height: 260px; }
   }
@@ -434,18 +474,19 @@
       <a class="nav-link" id="list-link" href="list.html">List view</a>
       <a class="nav-link" id="chart-link" href="chart.html">Chart view</a>
       <a class="nav-link" aria-current="page">Insider trades</a>
+      <a class="nav-link" href="feed.html">Insider feed</a>
       <a class="nav-link" href="japan.html">Bond flows</a>
     </nav>
   </header>
 
   <main>
     <form class="lookup" id="lookup" role="search">
-      <label class="ticker-field">
+      <div class="ticker-field">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="m10.6 10.6 3.4 3.4"/></svg>
-        <input id="ticker" list="tracked" placeholder="Ticker, e.g. NVDA" aria-label="Ticker" autocomplete="off" spellcheck="false" autofocus />
+        <input id="ticker" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggest" placeholder="Ticker or company, e.g. NVDA" aria-label="Ticker" autocomplete="off" spellcheck="false" autofocus />
         <span class="kbd" aria-hidden="true">/</span>
-      </label>
-      <datalist id="tracked"></datalist>
+        <ul class="suggest hidden" id="suggest" role="listbox" aria-label="Ticker suggestions"></ul>
+      </div>
       <div class="segmented" id="period" role="group" aria-label="Period">
         <button type="button" data-days="30">1M</button>
         <button type="button" data-days="90">3M</button>
