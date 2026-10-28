@@ -4,6 +4,8 @@ const chartWrapEl = document.getElementById('chart-wrap');
 const chartEl = document.getElementById('chart');
 const supplyBoxEl = document.getElementById('supply-box');
 const demandBoxEl = document.getElementById('demand-box');
+const weekdayHighlightEl = document.getElementById('weekday-highlight');
+const weekdayHighlightLabelEl = document.getElementById('weekday-highlight-label');
 const statusEl = document.getElementById('status');
 
 const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -386,6 +388,7 @@ new ResizeObserver(entries => {
     chart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height });
   }
   scheduleZoneBoxUpdate();
+  updateWeekdayHighlight();
 }).observe(chartWrapEl);
 
 chart.timeScale().subscribeVisibleLogicalRangeChange(() => updateZoneBoxes());
@@ -429,6 +432,53 @@ function scheduleZoneBoxUpdate() {
   });
   setTimeout(updateZoneBoxes, 100);
 }
+
+let hoveredWeekdayIdx = null;
+let weekdayHighlightPool = [];
+
+function updateWeekdayHighlight() {
+  if (hoveredWeekdayIdx === null || !barsAscending.length) {
+    for (const el of weekdayHighlightPool) el.style.display = 'none';
+    weekdayHighlightLabelEl.style.display = 'none';
+    return;
+  }
+
+  const hoveredTime = barsAscending[hoveredWeekdayIdx].time;
+  const weekday = new Date(hoveredTime * 1000).getUTCDay();
+
+  const neighborIdx = hoveredWeekdayIdx > 0 ? hoveredWeekdayIdx - 1 : hoveredWeekdayIdx + 1;
+  const xHovered = chart.timeScale().timeToCoordinate(hoveredTime);
+  const xNeighbor = barsAscending[neighborIdx]
+    ? chart.timeScale().timeToCoordinate(barsAscending[neighborIdx].time)
+    : null;
+  const spacing = xHovered !== null && xNeighbor !== null ? Math.abs(xHovered - xNeighbor) : 8;
+
+  let poolIdx = 0;
+  for (const b of barsAscending) {
+    if (new Date(b.time * 1000).getUTCDay() !== weekday) continue;
+    const x = chart.timeScale().timeToCoordinate(b.time);
+    if (x === null) continue;
+    let el = weekdayHighlightPool[poolIdx];
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'weekday-highlight-band';
+      weekdayHighlightEl.appendChild(el);
+      weekdayHighlightPool.push(el);
+    }
+    el.style.display = 'block';
+    el.style.left = `${x - spacing / 2}px`;
+    el.style.width = `${spacing}px`;
+    poolIdx++;
+  }
+  for (; poolIdx < weekdayHighlightPool.length; poolIdx++) {
+    weekdayHighlightPool[poolIdx].style.display = 'none';
+  }
+
+  weekdayHighlightLabelEl.textContent = `Highlighting all ${WEEKDAY_NAMES[weekday]}s`;
+  weekdayHighlightLabelEl.style.display = 'block';
+}
+
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => updateWeekdayHighlight());
 
 function fmt(n) {
   if (n === undefined || n === null || Number.isNaN(n)) return '–';
@@ -535,7 +585,14 @@ chart.subscribeCrosshairMove(param => {
   updateLegend(barsAscending[idx], idx > 0 ? barsAscending[idx - 1] : null);
 });
 
+chart.subscribeCrosshairMove(param => {
+  hoveredWeekdayIdx = param && param.time ? barTimeToIndex.get(param.time) ?? null : null;
+  updateWeekdayHighlight();
+});
+
 async function loadData() {
+  hoveredWeekdayIdx = null;
+  updateWeekdayHighlight();
   statusEl.textContent = 'Loading…';
   const resp = await fetch(`/api/data?symbol=${encodeURIComponent(currentSymbol)}`);
   if (!resp.ok) {
