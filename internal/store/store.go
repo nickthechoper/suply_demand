@@ -183,6 +183,18 @@ func (s *Store) UpsertBars(symbol string, bars []yahoo.Bar) error {
 	}
 	defer tx.Rollback()
 
+	// Yahoo reports the still-forming "today" bar under a timestamp that
+	// drifts with the last trade time, rather than the fixed session-open
+	// timestamp completed days get. A later refresh for that same calendar
+	// day then arrives under a different ts, so without this cleanup the
+	// ON CONFLICT upsert below would insert a second bar for the same day
+	// instead of replacing the first.
+	dedupeStmt, err := tx.Prepare(`DELETE FROM bars WHERE symbol = ? AND ts >= ? AND ts < ? AND ts != ?`)
+	if err != nil {
+		return err
+	}
+	defer dedupeStmt.Close()
+
 	stmt, err := tx.Prepare(`
 		INSERT INTO bars (symbol, ts, open, high, low, close, volume)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -199,6 +211,11 @@ func (s *Store) UpsertBars(symbol string, bars []yahoo.Bar) error {
 	defer stmt.Close()
 
 	for _, b := range bars {
+		dayStart := time.Date(b.Time.Year(), b.Time.Month(), b.Time.Day(), 0, 0, 0, 0, time.UTC)
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		if _, err := dedupeStmt.Exec(symbol, dayStart.Unix(), dayEnd.Unix(), b.Time.Unix()); err != nil {
+			return fmt.Errorf("removing stale same-day bar for %s: %w", b.Time, err)
+		}
 		if _, err := stmt.Exec(symbol, b.Time.Unix(), b.Open, b.High, b.Low, b.Close, b.Volume); err != nil {
 			return fmt.Errorf("upserting bar at %s: %w", b.Time, err)
 		}
