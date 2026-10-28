@@ -13,18 +13,12 @@ function tickMarkFormatter(time, tickMarkType) {
   const date = new Date(time * 1000);
   const pad = n => String(n).padStart(2, '0');
   switch (tickMarkType) {
-    case LightweightCharts.TickMarkType.Year:
-      return String(date.getUTCFullYear());
-    case LightweightCharts.TickMarkType.Month:
-      return MONTH_NAMES[date.getUTCMonth()];
-    case LightweightCharts.TickMarkType.DayOfMonth:
-      return `${WEEKDAY_NAMES[date.getUTCDay()]} ${date.getUTCDate()}`;
     case LightweightCharts.TickMarkType.Time:
       return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
     case LightweightCharts.TickMarkType.TimeWithSeconds:
       return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
     default:
-      return '';
+      return `${WEEKDAY_NAMES[date.getUTCDay()]} ${date.getUTCDate()} ${MONTH_NAMES[date.getUTCMonth()]}`;
   }
 }
 
