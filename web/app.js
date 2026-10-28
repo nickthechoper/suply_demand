@@ -6,13 +6,35 @@ const supplyBoxEl = document.getElementById('supply-box');
 const demandBoxEl = document.getElementById('demand-box');
 const statusEl = document.getElementById('status');
 
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function tickMarkFormatter(time, tickMarkType) {
+  const date = new Date(time * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  switch (tickMarkType) {
+    case LightweightCharts.TickMarkType.Year:
+      return String(date.getUTCFullYear());
+    case LightweightCharts.TickMarkType.Month:
+      return MONTH_NAMES[date.getUTCMonth()];
+    case LightweightCharts.TickMarkType.DayOfMonth:
+      return `${WEEKDAY_NAMES[date.getUTCDay()]} ${date.getUTCDate()}`;
+    case LightweightCharts.TickMarkType.Time:
+      return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+    case LightweightCharts.TickMarkType.TimeWithSeconds:
+      return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+    default:
+      return '';
+  }
+}
+
 const chart = LightweightCharts.createChart(chartEl, {
   layout: { background: { color: '#0e1117' }, textColor: '#e6e6e6' },
   grid: {
     vertLines: { color: '#1c2128' },
     horzLines: { color: '#1c2128' },
   },
-  timeScale: { timeVisible: false, borderColor: '#2a3038' },
+  timeScale: { timeVisible: false, borderColor: '#2a3038', tickMarkFormatter },
   rightPriceScale: {
     borderColor: '#2a3038',
     scaleMargins: { top: 0.1, bottom: 0.2 },
