@@ -185,6 +185,19 @@
   }
   .indicator-legend .legend-name { color: var(--muted); margin-right: 8px; }
   .indicator-legend .legend-value { font-weight: 600; margin-right: 10px; }
+  .pane-date {
+    position: absolute;
+    bottom: 4px;
+    z-index: 6;
+    pointer-events: none;
+    transform: translateX(-50%);
+    padding: 2px 6px;
+    border-radius: 2px;
+    background: #4c525e;
+    color: #fff;
+    font-size: 11px;
+    white-space: nowrap;
+  }
   .zone-box {
     position: absolute;
     left: 0;
@@ -421,6 +434,7 @@
 
   <div id="bond-wrap" class="indicator-wrap hidden">
     <div id="bond-pane-chart" class="indicator-chart"></div>
+    <div class="pane-date hidden"></div>
     <div class="indicator-legend">
       <span class="legend-name" id="legend-bond-name">Bond Yield</span>
       <span class="legend-value" id="legend-bond" style="color:#ffb74d">–</span>
@@ -429,6 +443,7 @@
 
   <div id="atr-wrap" class="indicator-wrap">
     <div id="atr-chart" class="indicator-chart"></div>
+    <div class="pane-date hidden"></div>
     <div class="indicator-legend">
       <span class="legend-name">ATR 14 RMA</span>
       <span class="legend-value" id="legend-atr" style="color:#ef5350">–</span>
@@ -437,6 +452,7 @@
 
   <div id="rsi-wrap" class="indicator-wrap">
     <div id="rsi-chart" class="indicator-chart"></div>
+    <div class="pane-date hidden"></div>
     <div class="indicator-legend">
       <span class="legend-name">RSI 14 close</span>
       <span class="legend-value" id="legend-rsi" style="color:#b39ddb">–</span>
@@ -446,6 +462,7 @@
 
   <div id="rsi-diff-wrap" class="indicator-wrap">
     <div id="rsi-diff-chart" class="indicator-chart"></div>
+    <div class="pane-date hidden"></div>
     <div class="indicator-legend">
       <span class="legend-name">RSI MA Difference 14 14</span>
       <span class="legend-value" id="legend-rsi-diff">–</span>

@@ -51,11 +51,21 @@ function zonePill(row) {
   return `<span class="zone-pill ${side}">${label}</span>`;
 }
 
+function signedPct(n) {
+  return n === undefined || n === null || Number.isNaN(n) ? '–' : `${n >= 0 ? '+' : ''}${fmt(n)}%`;
+}
+
+function yieldChg(change, suffix, title) {
+  if (change === undefined || change === null) return '';
+  const bp = Math.round(change * 100);
+  return `<span class="yield-chg ${bp > 0 ? 'neg' : bp < 0 ? 'pos' : ''}" title="${title}">${bp > 0 ? '+' : ''}${bp}bp${suffix}</span>`;
+}
+
 function bondYieldCell(row) {
   if (row.bondYieldPct === undefined || row.bondYieldPct === null) return '–';
-  const bp = row.bondYieldChange === undefined || row.bondYieldChange === null ? null : Math.round(row.bondYieldChange * 100);
-  const chg = bp === null ? '' : `<span class="yield-chg ${bp > 0 ? 'neg' : bp < 0 ? 'pos' : ''}">${bp > 0 ? '+' : ''}${bp}bp</span>`;
-  return `<a class="cell-link" href="chart.html?symbol=${encodeURIComponent(row.symbol)}#bonds" title="${escapeHtml(row.bondLabel)}">${fmt(row.bondYieldPct)}%</a>${chg}`;
+  const day = yieldChg(row.bondYieldChange, '', 'Change since previous trade day');
+  const week = yieldChg(row.bondYieldWeekChange, ' 1W', 'Change over the last week');
+  return `<a class="cell-link" href="chart.html?symbol=${encodeURIComponent(row.symbol)}#bonds" title="${escapeHtml(row.bondLabel)}">${fmt(row.bondYieldPct)}%</a>${day}${week}`;
 }
 
 function bondYieldClass(y) {
@@ -240,7 +250,8 @@ const COLUMNS = [
   { id: 'sector', label: 'Sector', left: true, tdClass: () => 'sector', cell: r => filterButton('sector', r.sector, sectorFilter) },
   { id: 'industry', label: 'Industry', left: true, tdClass: () => 'industry', cell: r => filterButton('industry', r.industry, industryFilter) },
   { id: 'price', label: 'Price', cell: r => fmt(r.price) },
-  { id: 'dailyChangePct', label: 'Daily Change', tdClass: r => pctClass(r.dailyChangePct), cell: r => r.dailyChangePct === undefined || r.dailyChangePct === null ? '–' : `${r.dailyChangePct >= 0 ? '+' : ''}${fmt(r.dailyChangePct)}%` },
+  { id: 'dailyChangePct', label: 'Daily Change', tdClass: r => pctClass(r.dailyChangePct), cell: r => signedPct(r.dailyChangePct) },
+  { id: 'weeklyChangePct', label: 'Weekly Change', title: 'Change vs the last close at least 7 days earlier', tdClass: r => pctClass(r.weeklyChangePct), cell: r => signedPct(r.weeklyChangePct) },
   { id: 'zonePct', label: 'Zone', cell: r => zonePill(r) },
   { id: 'pegRatio', label: 'PEG', cell: r => fmt(r.pegRatio) },
   { id: 'roicPct', label: 'ROIC TTM', tdClass: r => pctClass(r.roicPct), cell: r => fmtPct(r.roicPct) },

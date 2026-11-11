@@ -49,3 +49,22 @@ func Since(points []finra.DailyYield, from time.Time) []finra.DailyYield {
 	}
 	return []finra.DailyYield{}
 }
+
+func WeeklyChange(points []finra.DailyYield) *float64 {
+	if len(points) < 2 {
+		return nil
+	}
+	last := points[len(points)-1]
+	day, err := time.Parse(time.DateOnly, last.Date)
+	if err != nil {
+		return nil
+	}
+	cutoff := day.AddDate(0, 0, -7).Format(time.DateOnly)
+	for i := len(points) - 2; i >= 0; i-- {
+		if points[i].Date <= cutoff {
+			v := last.YieldPct - points[i].YieldPct
+			return &v
+		}
+	}
+	return nil
+}

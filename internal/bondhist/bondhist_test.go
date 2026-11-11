@@ -62,3 +62,19 @@ func TestSyncBackfillsThenTopsUp(t *testing.T) {
 		t.Errorf("Since kept %d days, want 2", len(got))
 	}
 }
+
+func TestWeeklyChange(t *testing.T) {
+	points := []finra.DailyYield{
+		{Date: "2026-10-30", YieldPct: 9},
+		{Date: "2026-11-02", YieldPct: 10},
+		{Date: "2026-11-05", YieldPct: 10.5},
+		{Date: "2026-11-09", YieldPct: 11.25},
+	}
+	got := WeeklyChange(points)
+	if got == nil || *got != 1.25 {
+		t.Fatalf("got %v; want 1.25 (vs 2026-11-02)", got)
+	}
+	if WeeklyChange(points[2:]) != nil {
+		t.Fatal("want nil when no point is a week old")
+	}
+}

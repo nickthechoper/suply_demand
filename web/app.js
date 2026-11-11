@@ -175,10 +175,37 @@ function crosshairValueForChart(otherChart, idx) {
   if (otherChart === rsiChart) return rsiValues[idx] ?? 0;
   return rsiDiffValues[idx] ?? 0;
 }
+const paneDateEls = new Map(allCharts.slice(1).map((c, i) => [c, allChartEls[i + 1].parentElement.querySelector('.pane-date')]));
+
+function fmtCrosshairDate(time) {
+  const date = new Date(time * 1000);
+  return `${WEEKDAY_NAMES[date.getUTCDay()]} ${date.getUTCDate()} ${MONTH_NAMES[date.getUTCMonth()]} '${String(date.getUTCFullYear()).slice(2)}`;
+}
+
+function updatePaneDates(time) {
+  paneDateEls.forEach((el, c) => {
+    const x = time ? c.timeScale().timeToCoordinate(time) : null;
+    if (x === null) {
+      el.classList.add('hidden');
+      return;
+    }
+    el.textContent = fmtCrosshairDate(time);
+    el.classList.remove('hidden');
+    const half = el.offsetWidth / 2;
+    const maxX = el.parentElement.clientWidth - c.priceScale('right').width() - half;
+    el.style.left = `${Math.max(half, Math.min(x, maxX))}px`;
+  });
+}
+
 allCharts.forEach(c => {
   c.subscribeCrosshairMove(param => {
     if (syncingCrosshair) return;
     syncingCrosshair = true;
+    updatePaneDates(param && param.time);
+    updateIndicatorLegendsAt(param && param.time);
+    updateOhlcLegendAt(param && param.time);
+    hoveredWeekdayIdx = param && param.time ? barTimeToIndex.get(param.time) ?? null : null;
+    updateWeekdayHighlight();
     if (param && param.time) {
       const idx = barTimeToIndex.get(param.time);
       if (c === rsiChart && idx !== undefined) {
@@ -199,6 +226,7 @@ allCharts.forEach(c => {
 
 function clearAllCrosshairs() {
   allCharts.forEach(c => c.clearCrosshairPosition());
+  updatePaneDates(null);
   updateIndicatorLegends(barsAscending.length - 1);
 }
 
@@ -243,15 +271,15 @@ function updateAITheme(theme) {
   el.textContent = theme || 'n/a';
 }
 
-chart.subscribeCrosshairMove(param => {
+function updateIndicatorLegendsAt(time) {
   if (!barsAscending.length) return;
-  if (!param || !param.time) {
+  if (!time) {
     updateIndicatorLegends(barsAscending.length - 1);
     return;
   }
-  const idx = barTimeToIndex.get(param.time);
+  const idx = barTimeToIndex.get(time);
   updateIndicatorLegends(idx === undefined ? null : idx);
-});
+}
 
 function rma(values, length) {
   const out = new Array(values.length).fill(null);
@@ -573,22 +601,17 @@ function updateFundamentals(f) {
   }
 }
 
-chart.subscribeCrosshairMove(param => {
+function updateOhlcLegendAt(time) {
   if (!barsAscending.length) return;
-  if (!param || !param.time) {
+  if (!time) {
     const lastIdx = barsAscending.length - 1;
     updateLegend(barsAscending[lastIdx], barsAscending[lastIdx - 1]);
     return;
   }
-  const idx = barTimeToIndex.get(param.time);
+  const idx = barTimeToIndex.get(time);
   if (idx === undefined) return;
   updateLegend(barsAscending[idx], idx > 0 ? barsAscending[idx - 1] : null);
-});
-
-chart.subscribeCrosshairMove(param => {
-  hoveredWeekdayIdx = param && param.time ? barTimeToIndex.get(param.time) ?? null : null;
-  updateWeekdayHighlight();
-});
+}
 
 async function loadData() {
   hoveredWeekdayIdx = null;

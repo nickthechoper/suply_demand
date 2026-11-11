@@ -353,6 +353,7 @@ type screenerRowDTO struct {
 	Name               string   `json:"name"`
 	Price              float64  `json:"price"`
 	DailyChangePct     *float64 `json:"dailyChangePct"`
+	WeeklyChangePct    *float64 `json:"weeklyChangePct"`
 	Zone               string   `json:"zone"`
 	DeepDemand         bool     `json:"deepDemand"`
 	ZonePct            *float64 `json:"zonePct"`
@@ -370,6 +371,7 @@ type screenerRowDTO struct {
 	NetOpenMarket      *float64 `json:"netOpenMarket"`
 	BondYieldPct       *float64 `json:"bondYieldPct"`
 	BondYieldChange    *float64 `json:"bondYieldChange"`
+	BondYieldWeekChg   *float64 `json:"bondYieldWeekChange"`
 	BondLabel          string   `json:"bondLabel"`
 	Note               string   `json:"note"`
 	Favorite           bool     `json:"favorite"`
@@ -419,6 +421,24 @@ func flags(in flagInput) []string {
 		out = append(out, "Possible value trap")
 	}
 	return out
+}
+
+func weeklyChangePct(bars []yahoo.Bar) *float64 {
+	if len(bars) < 2 {
+		return nil
+	}
+	last := bars[len(bars)-1]
+	cutoff := last.Time.AddDate(0, 0, -7).Format(time.DateOnly)
+	for i := len(bars) - 2; i >= 0; i-- {
+		if bars[i].Time.Format(time.DateOnly) <= cutoff {
+			if bars[i].Close <= 0 {
+				return nil
+			}
+			v := (last.Close - bars[i].Close) / bars[i].Close * 100
+			return &v
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +526,8 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			dailyChangePct = &v
 		}
 
+		weeklyChangePct := weeklyChangePct(bars)
+
 		var upsidePct *float64
 		if targetMean != nil && *targetMean > 0 && last.Close > 0 {
 			v := (*targetMean - last.Close) / last.Close * 100
@@ -521,7 +543,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			netOpenMarket = &net
 		}
 
-		var bondYieldPct, bondYieldChange *float64
+		var bondYieldPct, bondYieldChange, bondYieldWeekChg *float64
 		var bondLabel string
 		if bonds, _, ok, err := s.store.Bonds(info.Symbol); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -529,6 +551,12 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 		} else if ok {
 			if b, found := finra.Headline(bonds, time.Now().UTC()); found {
 				bondYieldPct, bondYieldChange, bondLabel = b.YieldPct, b.YieldChange, b.Label()
+				history, err := s.store.BondYields(b.Symbol)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				bondYieldWeekChg = bondhist.WeeklyChange(history)
 			}
 		}
 
@@ -537,6 +565,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			Name:               info.Name,
 			Price:              last.Close,
 			DailyChangePct:     dailyChangePct,
+			WeeklyChangePct:    weeklyChangePct,
 			Zone:               zone,
 			DeepDemand:         deepDemand,
 			ZonePct:            zonePct,
@@ -561,13 +590,14 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 				CurrentRatio:          currentRatio,
 				BondYieldPct:          bondYieldPct,
 			}),
-			NetOpenMarket:   netOpenMarket,
-			BondYieldPct:    bondYieldPct,
-			BondYieldChange: bondYieldChange,
-			BondLabel:       bondLabel,
-			Note:            info.Note,
-			Favorite:        info.Favorite,
-			AITheme:         category.Theme(info.Symbol),
+			NetOpenMarket:    netOpenMarket,
+			BondYieldPct:     bondYieldPct,
+			BondYieldChange:  bondYieldChange,
+			BondYieldWeekChg: bondYieldWeekChg,
+			BondLabel:        bondLabel,
+			Note:             info.Note,
+			Favorite:         info.Favorite,
+			AITheme:          category.Theme(info.Symbol),
 		}
 		if ok {
 			row.Sector = companyData.Profile.Sector
