@@ -44,6 +44,16 @@ let view = 'country';
 let query = '';
 let sort = { key: 'net', dir: -1 };
 let showSmall = false;
+let trendChart = null;
+
+const TREND_BARS = [
+  { code: 'DE', color: '#1f6fb5' },
+  { code: 'FR', color: '#29a8ff' },
+  { code: 'NL', color: '#8fc3dc' },
+  { code: 'IT', color: '#f2b705' },
+  { code: 'ES', color: '#0f4a6b' },
+];
+const US_RED = '#ff4d5e';
 
 function loadPrefs() {
   try {
@@ -156,6 +166,19 @@ function renderShell() {
 
   resultEl.innerHTML = `
     <div class="kpis" id="kpis"></div>
+    ${investor === 'jp' ? `<div class="card">
+      <div class="card-head">
+        <h3>Japanese investors going back home?</h3>
+        <span class="hint">12-month sum of net purchases of long-term debt securities, ¥100bn</span>
+      </div>
+      <div class="trend-legend">
+        ${TREND_BARS.map((b) => `<span><i style="background:${b.color}"></i>${b.code}</span>`).join('')}
+        <span><i style="background:#9aa4af"></i>Other EA</span>
+        <span><i class="line" style="background:var(--text)"></i>Total EA (lhs)</span>
+        <span><i class="line" style="background:${US_RED}"></i>US (rhs)</span>
+      </div>
+      <div class="trend-body"><canvas id="trend"></canvas></div>
+    </div>` : ''}
     <div class="card">
       <div class="card-head">
         <h3>Net purchases by market</h3>
@@ -275,6 +298,7 @@ function heat(v, max) {
 function update() {
   flows.rows.forEach((r) => { r.stats = stats(r); });
   renderKpis();
+  drawTrend();
 
   const start = startIndex();
   const end = flows.months.length;
@@ -325,6 +349,75 @@ function update() {
 
   document.getElementById('body').innerHTML = (total ? line(total, 'total') : '') + rows.map((r) => line(r, '')).join('');
   document.getElementById('empty').classList.toggle('hidden', rows.length > 0);
+}
+
+function rolling(values) {
+  return values.map((_, i) => {
+    if (i < 11) return null;
+    let sum = 0;
+    for (let k = i - 11; k <= i; k++) {
+      if (values[k] == null) return null;
+      sum += values[k];
+    }
+    return sum / 100;
+  });
+}
+
+function drawTrend() {
+  if (trendChart) {
+    trendChart.destroy();
+    trendChart = null;
+  }
+  const canvas = document.getElementById('trend');
+  if (!canvas || typeof Chart === 'undefined') return;
+  const byCode = Object.fromEntries(flows.rows.map((r) => [r.code, r]));
+  const ea = byCode.EA;
+  const us = byCode.US;
+  if (!ea || !us) return;
+  const named = TREND_BARS.map((b) => rolling(byCode[b.code].values));
+  const eaRoll = rolling(ea.values);
+  const other = eaRoll.map((v, i) => (v == null || named.some((n) => n[i] == null) ? null : v - named.reduce((a, n) => a + n[i], 0)));
+  const labels = flows.months;
+  const text = getComputedStyle(document.documentElement).getPropertyValue('--text').trim();
+  const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+  const bar = (label, data, color) => ({ type: 'bar', label, data, stack: 'ea', yAxisID: 'y', order: 2, backgroundColor: color, borderWidth: 0, categoryPercentage: 1, barPercentage: 1 });
+  const line = (label, data, color, axis) => ({ type: 'line', label, data, yAxisID: axis, order: 1, borderColor: color, backgroundColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0, spanGaps: false });
+  const grid = { color: 'rgba(255, 255, 255, 0.06)' };
+  trendChart = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: [
+        ...TREND_BARS.map((b, i) => bar(b.code, named[i], b.color)),
+        bar('Other EA', other, '#9aa4af'),
+        line('Total EA', eaRoll, text, 'y'),
+        line('US', rolling(us.values), US_RED, 'y2'),
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          itemSort: (a, b) => (a.dataset.type === 'line') - (b.dataset.type === 'line') || a.datasetIndex - b.datasetIndex,
+          callbacks: {
+            title: (items) => `12 months to ${monthLabel(labels[items[0].dataIndex], true)}`,
+            label: (item) => ` ${item.dataset.label}: ${item.raw == null ? '—' : item.raw.toFixed(1)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 8, callback: function (v) { return monthLabel(labels[v]); } },
+        },
+        y: { position: 'left', stacked: true, grid, border: { display: false }, ticks: { color: muted } },
+        y2: { position: 'right', grid: { display: false }, border: { display: false }, ticks: { color: US_RED } },
+      },
+    },
+  });
 }
 
 investorEl.addEventListener('click', (e) => {
