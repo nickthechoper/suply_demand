@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Steady Climbers — Supply &amp; Demand Dashboard</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-2: #1c222b;
+    --border: #2a3038;
+    --text: #e6e6e6;
+    --muted: #9aa4af;
+    --faint: #6b7580;
+    --supply: #2157f3;
+    --accent: #6f96ff;
+    --pos: #4fd1c5;
+    --neg: #ef8b88;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 28px;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html { scrollbar-gutter: stable; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    background: var(--bg);
+    color: var(--text);
+  }
+  a { color: inherit; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .hidden { display: none !important; }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: 68px;
+    padding: 0 var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .page-nav { display: flex; gap: var(--space-3); margin-left: auto; flex-shrink: 0; }
+  header .nav-link {
+    line-height: 18px;
+    white-space: nowrap;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    padding: var(--space-2) var(--space-4);
+    border-radius: 8px;
+  }
+  header .nav-link:hover { border-color: var(--supply); }
+  header .nav-link[aria-current="page"] { background: var(--supply); border-color: var(--supply); color: #fff; cursor: default; user-select: none; }
+
+  main { max-width: 900px; margin: 0 auto; padding: var(--space-5) var(--space-6) var(--space-6); }
+
+  .title-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-4); }
+  .title-row h2 { margin: 0; font-size: 22px; }
+  .title-row .summary { color: var(--muted); font-size: 13px; }
+  .title-row #steady-toggle {
+    margin-left: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .title-row #steady-toggle:hover { border-color: var(--supply); }
+  .title-row #steady-toggle[aria-pressed="true"] { background: var(--supply); border-color: var(--supply); color: #fff; font-weight: 600; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 10px var(--space-4); text-align: left; border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--panel-2); }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; user-select: none; }
+  th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+  th button:hover { color: var(--text); }
+  th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 10px; }
+  th[aria-sort="descending"] button::after { content: " ▼"; font-size: 10px; }
+  .pos { color: var(--pos); }
+  .neg { color: var(--neg); }
+  .cell-link { text-decoration: none; }
+  .cell-link:hover { text-decoration: underline; }
+  .sym { font-weight: 600; }
+  .nm { color: var(--muted); }
+  .empty { padding: var(--space-6); color: var(--muted); text-align: center; }
+  .foot { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); color: var(--faint); font-size: 12px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Supply &amp; Demand Dashboard</h1>
+    <nav class="page-nav">
+      <a class="nav-link" href="list.html">List view</a>
+      <a class="nav-link" href="chart.html">Chart view</a>
+      <a class="nav-link" href="insider.html">Insider trades</a>
+      <a class="nav-link" href="feed.html">Insider feed</a>
+      <a class="nav-link" aria-current="page">Steady climbers</a>
+      <a class="nav-link" href="japan.html">Bond flows</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="title-row">
+      <h2>Steady climbers</h2>
+      <span class="summary" id="summary"></span>
+      <button id="steady-toggle" type="button" aria-pressed="true">Steady climbers only</button>
+    </div>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="symbol" aria-sort="none"><button type="button">Ticker</button></th>
+            <th data-key="twoYearReturnPct" aria-sort="descending"><button type="button">2-year return</button></th>
+            <th data-key="twoYearMaxDrawdownPct" aria-sort="none"><button type="button">Max drawdown</button></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty hidden" id="empty">No tickers match.</div>
+      <div class="foot">Steady climber: up at least 100% over the last 2 years with a max drawdown (largest peak-to-trough fall in closing price) of 30% or less.</div>
+    </div>
+  </main>
+  <script src="steady.js"></script>
+</body>
+</html>
