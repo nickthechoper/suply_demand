@@ -252,6 +252,8 @@ const COLUMNS = [
   { id: 'price', label: 'Price', cell: r => fmt(r.price) },
   { id: 'dailyChangePct', label: 'Daily Change', tdClass: r => pctClass(r.dailyChangePct), cell: r => signedPct(r.dailyChangePct) },
   { id: 'weeklyChangePct', label: 'Weekly Change', title: 'Change vs the last close at least 7 days earlier', tdClass: r => pctClass(r.weeklyChangePct), cell: r => signedPct(r.weeklyChangePct) },
+  { id: 'twoYearReturnPct', label: '2Y Return', title: 'Change in close over the last 2 years', tdClass: r => pctClass(r.twoYearReturnPct), cell: r => signedPct(r.twoYearReturnPct) },
+  { id: 'twoYearMaxDrawdownPct', label: '2Y Max Drawdown', title: 'Largest peak-to-trough fall in close over the last 2 years', tdClass: r => pctClass(r.twoYearMaxDrawdownPct), cell: r => signedPct(r.twoYearMaxDrawdownPct) },
   { id: 'zonePct', label: 'Zone', cell: r => zonePill(r) },
   { id: 'pegRatio', label: 'PEG', cell: r => fmt(r.pegRatio) },
   { id: 'roicPct', label: 'ROIC TTM', tdClass: r => pctClass(r.roicPct), cell: r => fmtPct(r.roicPct) },
