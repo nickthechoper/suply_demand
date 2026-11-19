@@ -354,6 +354,8 @@ type screenerRowDTO struct {
 	Price              float64  `json:"price"`
 	DailyChangePct     *float64 `json:"dailyChangePct"`
 	WeeklyChangePct    *float64 `json:"weeklyChangePct"`
+	TwoYearReturnPct   *float64 `json:"twoYearReturnPct"`
+	TwoYearMaxDDPct    *float64 `json:"twoYearMaxDrawdownPct"`
 	Zone               string   `json:"zone"`
 	DeepDemand         bool     `json:"deepDemand"`
 	ZonePct            *float64 `json:"zonePct"`
@@ -439,6 +441,33 @@ func weeklyChangePct(bars []yahoo.Bar) *float64 {
 		}
 	}
 	return nil
+}
+
+func twoYearStats(bars []yahoo.Bar) (returnPct, maxDrawdownPct *float64) {
+	if len(bars) < 2 {
+		return nil, nil
+	}
+	last := bars[len(bars)-1]
+	cutoff := last.Time.AddDate(-2, 0, 0)
+	start := 0
+	for start < len(bars) && bars[start].Time.Before(cutoff) {
+		start++
+	}
+	window := bars[start:]
+	if len(window) < 2 || window[0].Close <= 0 {
+		return nil, nil
+	}
+	ret := (last.Close/window[0].Close - 1) * 100
+	peak, worst := window[0].Close, 0.0
+	for _, b := range window {
+		if b.Close > peak {
+			peak = b.Close
+		}
+		if dd := (b.Close/peak - 1) * 100; dd < worst {
+			worst = dd
+		}
+	}
+	return &ret, &worst
 }
 
 func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +556,7 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 		}
 
 		weeklyChangePct := weeklyChangePct(bars)
+		twoYearReturnPct, twoYearMaxDDPct := twoYearStats(bars)
 
 		var upsidePct *float64
 		if targetMean != nil && *targetMean > 0 && last.Close > 0 {
@@ -566,6 +596,8 @@ func (s *Server) handleScreener(w http.ResponseWriter, r *http.Request) {
 			Price:              last.Close,
 			DailyChangePct:     dailyChangePct,
 			WeeklyChangePct:    weeklyChangePct,
+			TwoYearReturnPct:   twoYearReturnPct,
+			TwoYearMaxDDPct:    twoYearMaxDDPct,
 			Zone:               zone,
 			DeepDemand:         deepDemand,
 			ZonePct:            zonePct,
