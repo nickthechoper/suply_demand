@@ -1,9 +1,11 @@
 package openinsider
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -15,7 +17,11 @@ import (
 const (
 	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	cacheTTL  = 10 * time.Minute
-	attempts  = 3
+	attempts  = 2
+	latestTTL = 24 * time.Hour
+
+	LatestWindow = 30
+	smallDays    = 3
 
 	WindowDays = 730
 )
@@ -51,13 +57,16 @@ var (
 	tickerRe = regexp.MustCompile(`href="/([A-Za-z0-9.\-]+)"`)
 	numRe    = regexp.MustCompile(`[$,+%]`)
 
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 45 * time.Second}
 
 	mu    sync.Mutex
 	cache = map[string]cacheEntry{}
 
 	latestMu    sync.Mutex
-	latestCache = map[int]cacheEntry{}
+	latestFull  cacheEntry
+	latestSmall = map[int]cacheEntry{}
+	latestBusy  bool
+	latestSave  func([]Trade) error
 )
 
 type cacheEntry struct {
@@ -101,13 +110,113 @@ func Fetch(symbol string, days int) ([]Trade, error) {
 	return parse(string(body)), nil
 }
 
-func Latest(days int) ([]Trade, time.Time, error) {
+func UseLatestStore(load func() ([]Trade, time.Time, bool), save func([]Trade) error) {
 	latestMu.Lock()
 	defer latestMu.Unlock()
-	if e, ok := latestCache[days]; ok && time.Since(e.at) < cacheTTL {
+	latestSave = save
+	if load == nil {
+		return
+	}
+	if trades, at, ok := load(); ok {
+		latestFull = cacheEntry{at: at, trades: trades}
+	}
+}
+
+func StartLatestRefresh(ctx context.Context) {
+	go func() {
+		latestMu.Lock()
+		stale := latestFull.at.IsZero() || time.Since(latestFull.at) >= latestTTL
+		latestMu.Unlock()
+		if stale {
+			refreshLatest()
+		}
+		ticker := time.NewTicker(latestTTL)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refreshLatest()
+			}
+		}
+	}()
+}
+
+func Latest(days int) ([]Trade, time.Time, error) {
+	latestMu.Lock()
+	if !latestFull.at.IsZero() {
+		e := latestFull
+		latestMu.Unlock()
+		return filedWithin(e.trades, days), e.at, nil
+	}
+	if !latestBusy {
+		go refreshLatest()
+	}
+	if e, ok := latestSmall[days]; ok && time.Since(e.at) < cacheTTL {
+		latestMu.Unlock()
+		return e.trades, e.at, nil
+	}
+	latestMu.Unlock()
+
+	if days <= smallDays {
+		trades, err := fetchLatest(days)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		e := cacheEntry{at: time.Now(), trades: trades}
+		latestMu.Lock()
+		latestSmall[days] = e
+		latestMu.Unlock()
 		return e.trades, e.at, nil
 	}
 
+	for {
+		time.Sleep(200 * time.Millisecond)
+		latestMu.Lock()
+		e := latestFull
+		busy := latestBusy
+		latestMu.Unlock()
+		if !e.at.IsZero() {
+			return filedWithin(e.trades, days), e.at, nil
+		}
+		if !busy {
+			return nil, time.Time{}, fmt.Errorf("fetching latest openinsider trades failed")
+		}
+	}
+}
+
+func refreshLatest() {
+	latestMu.Lock()
+	if latestBusy {
+		latestMu.Unlock()
+		return
+	}
+	latestBusy = true
+	latestMu.Unlock()
+
+	trades, err := fetchLatest(LatestWindow)
+
+	latestMu.Lock()
+	latestBusy = false
+	save := latestSave
+	if err == nil {
+		latestFull = cacheEntry{at: time.Now(), trades: trades}
+	}
+	latestMu.Unlock()
+
+	if err != nil {
+		log.Printf("warning: could not refresh latest insider trades: %v", err)
+		return
+	}
+	if save != nil {
+		if err := save(trades); err != nil {
+			log.Printf("warning: could not store latest insider trades: %v", err)
+		}
+	}
+}
+
+func fetchLatest(days int) ([]Trade, error) {
 	url := fmt.Sprintf("http://openinsider.com/screener?s=&fd=%d&td=0&cnt=5000&xp=1&xs=1", days)
 	var body []byte
 	var err error
@@ -117,12 +226,20 @@ func Latest(days int) ([]Trade, time.Time, error) {
 		}
 	}
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("fetching latest openinsider trades: %w", err)
+		return nil, fmt.Errorf("fetching latest openinsider trades: %w", err)
 	}
+	return parse(string(body)), nil
+}
 
-	e := cacheEntry{at: time.Now(), trades: parse(string(body))}
-	latestCache[days] = e
-	return e.trades, e.at, nil
+func filedWithin(trades []Trade, days int) []Trade {
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+	out := []Trade{}
+	for _, t := range trades {
+		if len(t.Filed) < 10 || t.Filed[:10] >= cutoff {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func Within(trades []Trade, days int) []Trade {

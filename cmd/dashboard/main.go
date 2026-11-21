@@ -17,6 +17,7 @@ import (
 
 	"supplydemand/internal/alert"
 	"supplydemand/internal/mail"
+	"supplydemand/internal/openinsider"
 	"supplydemand/internal/server"
 	"supplydemand/internal/store"
 	"supplydemand/internal/worker"
@@ -114,6 +115,7 @@ func main() {
 	}
 
 	worker.BackfillNames(st, trackedSymbols)
+	openinsider.UseLatestStore(st.LatestInsider, st.SetLatestInsider)
 
 	var afterBars, afterBonds func(symbol string)
 	mailCfg, err := mail.LoadConfig(*mailConfigPath)
@@ -170,6 +172,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	openinsider.StartLatestRefresh(ctx)
 
 	workerDone := make(chan struct{})
 	go func() {
