@@ -120,6 +120,16 @@ func Open(path string) (*Store, error) {
 	}
 
 	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS insider_latest (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			data       TEXT NOT NULL,
+			fetched_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return nil, fmt.Errorf("creating insider_latest table: %w", err)
+	}
+
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS bonds (
 			symbol     TEXT PRIMARY KEY,
 			data       TEXT NOT NULL,
@@ -380,6 +390,34 @@ func (s *Store) InsiderTrades(symbol string) (trades []openinsider.Trade, fetche
 		return nil, time.Time{}, false, fmt.Errorf("decoding stored insider trades: %w", err)
 	}
 	return trades, time.Unix(ts, 0).UTC(), true, nil
+}
+
+func (s *Store) SetLatestInsider(trades []openinsider.Trade) error {
+	blob, err := json.Marshal(trades)
+	if err != nil {
+		return fmt.Errorf("encoding latest insider trades: %w", err)
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO insider_latest (id, data, fetched_at)
+		VALUES (1, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			data = excluded.data,
+			fetched_at = excluded.fetched_at
+	`, string(blob), time.Now().Unix())
+	return err
+}
+
+func (s *Store) LatestInsider() ([]openinsider.Trade, time.Time, bool) {
+	var blob string
+	var ts int64
+	if err := s.db.QueryRow(`SELECT data, fetched_at FROM insider_latest WHERE id = 1`).Scan(&blob, &ts); err != nil {
+		return nil, time.Time{}, false
+	}
+	var trades []openinsider.Trade
+	if err := json.Unmarshal([]byte(blob), &trades); err != nil {
+		return nil, time.Time{}, false
+	}
+	return trades, time.Unix(ts, 0).UTC(), true
 }
 
 func (s *Store) SetBonds(symbol string, bonds []finra.Bond) error {

@@ -171,6 +171,18 @@ async function load(silent = false) {
     updatedEl.textContent = '';
   }
   try {
+    if (!silent && days > 3 && !trades.length) {
+      const quick = await fetch('/api/insider/latest?days=1');
+      if (id !== requestId) return;
+      if (quick.ok) {
+        const quickJson = await quick.json();
+        if (id !== requestId) return;
+        trades = prepare(quickJson.trades || []);
+        fetchedAt = quickJson.fetchedAt || 0;
+        limit = PAGE;
+        render();
+      }
+    }
     const resp = await fetch(`/api/insider/latest?days=${days}`);
     if (id !== requestId) return;
     if (!resp.ok) throw new Error((await resp.text()).trim() || resp.statusText);
